@@ -101,6 +101,62 @@ const updateUserRole = async ({ userId, role }) => {
     return result.recordset[0]?.affectedRows || 0;
 };
 
+const updateMyProfile = async ({ userId, name }) => {
+    const pool = getPool();
+
+    await pool
+        .request()
+        .input('userId', sql.Int, userId)
+        .input('name', sql.NVarChar(100), name)
+        .input('username', sql.NVarChar(100), null)
+        .execute('dbo.usp_UpdateUserProfile');
+};
+
+const getUserAuthById = async (userId) => {
+    const pool = getPool();
+
+    const result = await pool
+        .request()
+        .input('userId', sql.Int, userId)
+        .query(`
+            SELECT
+                userId,
+                username,
+                name,
+                email,
+                passwordHash,
+                role,
+                isActive,
+                isVerified,
+                createdAt,
+                updatedAt
+            FROM dbo.Users
+            WHERE userId = @userId
+        `);
+
+    return result.recordset[0] || null;
+};
+
+const updatePassword = async ({ userId, passwordHash }) => {
+    const pool = getPool();
+
+    const result = await pool
+        .request()
+        .input('userId', sql.Int, userId)
+        .input('passwordHash', sql.NVarChar(255), passwordHash)
+        .query(`
+            UPDATE dbo.Users
+            SET
+                passwordHash = @passwordHash,
+                updatedAt = SYSDATETIME()
+            WHERE userId = @userId;
+
+            SELECT @@ROWCOUNT AS affectedRows;
+        `);
+
+    return result.recordset[0]?.affectedRows || 0;
+};
+
 module.exports = {
     registerUser,
     findUserByUsername,
@@ -108,4 +164,7 @@ module.exports = {
     setUserActiveStatus,
     getUsers,
     updateUserRole,
+    updateMyProfile,
+    getUserAuthById,
+    updatePassword,
 };

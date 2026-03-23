@@ -1,3 +1,4 @@
+const bcrypt = require('bcrypt');
 const userModel = require('../models/user.model');
 
 const setUserActiveStatus = async (req, res, next) => {
@@ -93,8 +94,90 @@ const updateUserRole = async (req, res, next) => {
     }
 };
 
+const updateMyProfile = async (req, res, next) => {
+    try {
+        const { name, username } = req.body;
+
+        if (!name) {
+            const error = new Error('Name is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (typeof username !== 'undefined') {
+            const error = new Error('Username cannot be changed.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        await userModel.updateMyProfile({
+            userId: req.user.userId,
+            name,
+        });
+
+        const updatedProfile = await userModel.getUserProfileById(req.user.userId);
+
+        res.json({
+            success: true,
+            message: 'Profile updated successfully.',
+            data: updatedProfile,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const changeMyPassword = async (req, res, next) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            const error = new Error('Current password and new password are required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (newPassword.length < 6) {
+            const error = new Error('New password must be at least 6 characters long.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const user = await userModel.getUserAuthById(req.user.userId);
+
+        if (!user) {
+            const error = new Error('User not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const isPasswordMatched = await bcrypt.compare(currentPassword, user.passwordHash);
+
+        if (!isPasswordMatched) {
+            const error = new Error('Current password is incorrect.');
+            error.statusCode = 401;
+            throw error;
+        }
+
+        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+        await userModel.updatePassword({
+            userId: req.user.userId,
+            passwordHash: newPasswordHash,
+        });
+
+        res.json({
+            success: true,
+            message: 'Password changed successfully.',
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getUsers,
     setUserActiveStatus,
     updateUserRole,
+    updateMyProfile,
+    changeMyPassword,
 };

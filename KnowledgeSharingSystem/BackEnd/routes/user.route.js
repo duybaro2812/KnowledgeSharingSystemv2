@@ -5,6 +5,18 @@ const userController = require('../controllers/user.controller');
 
 const router = express.Router();
 
+router.patch(
+    '/me',
+    authMiddleware,
+    userController.updateMyProfile
+);
+
+router.patch(
+    '/me/password',
+    authMiddleware,
+    userController.changeMyPassword
+);
+
 router.get(
     '/',
     authMiddleware,
