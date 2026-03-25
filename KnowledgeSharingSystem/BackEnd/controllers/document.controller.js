@@ -1,39 +1,8 @@
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const documentModel = require('../models/document.model');
+const { uploadDocumentBuffer } = require('../services/cloudinary.service');
 
-const getFileHash = (filePath) =>
-    new Promise((resolve, reject) => {
-        const hash = crypto.createHash('sha256');
-        const stream = fs.createReadStream(filePath);
-
-        stream.on('data', (chunk) => hash.update(chunk));
-        stream.on('end', () => resolve(hash.digest('hex')));
-        stream.on('error', reject);
-    });
-
-const removeFileIfExists = async (filePath) => {
-    if (!filePath) {
-        return;
-    }
-
-    try {
-        await fs.promises.unlink(filePath);
-    } catch (error) {
-        if (error.code !== 'ENOENT') {
-            throw error;
-        }
-    }
-};
-
-const getAbsoluteFilePathFromUrl = (fileUrl) => {
-    if (!fileUrl || !fileUrl.startsWith('/uploads/')) {
-        return null;
-    }
-
-    return path.join(__dirname, '..', fileUrl.replace(/^\//, ''));
-};
+const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
 
 const getDocuments = async (req, res, next) => {
     try {
@@ -99,8 +68,13 @@ const createDocument = async (req, res, next) => {
             throw error;
         }
 
-        const fileUrl = `/uploads/documents/${req.file.filename}`;
-        const fileHash = await getFileHash(req.file.path);
+        const cloudUploadResult = await uploadDocumentBuffer({
+            buffer: req.file.buffer,
+            originalFileName: req.file.originalname,
+        });
+
+        const fileUrl = cloudUploadResult.secure_url || cloudUploadResult.url;
+        const fileHash = getFileHashFromBuffer(req.file.buffer);
 
         const documentId = await documentModel.createDocument({
             ownerUserId: req.user.userId,
@@ -122,9 +96,6 @@ const createDocument = async (req, res, next) => {
             data: document,
         });
     } catch (error) {
-        if (req.file?.path) {
-            await removeFileIfExists(req.file.path);
-        }
         next(error);
     }
 };
@@ -163,11 +134,16 @@ const updateDocument = async (req, res, next) => {
         let fileHash = existingDocument.fileHash;
 
         if (req.file) {
-            fileUrl = `/uploads/documents/${req.file.filename}`;
+            const cloudUploadResult = await uploadDocumentBuffer({
+                buffer: req.file.buffer,
+                originalFileName: req.file.originalname,
+            });
+
+            fileUrl = cloudUploadResult.secure_url || cloudUploadResult.url;
             originalFileName = req.file.originalname;
             fileSizeBytes = req.file.size;
             mimeType = req.file.mimetype;
-            fileHash = await getFileHash(req.file.path);
+            fileHash = getFileHashFromBuffer(req.file.buffer);
         }
 
         await documentModel.updateDocument({
@@ -182,14 +158,6 @@ const updateDocument = async (req, res, next) => {
             categoryIds,
         });
 
-        if (req.file && existingDocument.fileUrl !== fileUrl) {
-            try {
-                await removeFileIfExists(getAbsoluteFilePathFromUrl(existingDocument.fileUrl));
-            } catch (cleanupError) {
-                console.error('Failed to remove old document file:', cleanupError.message);
-            }
-        }
-
         const updatedDocument = await documentModel.getDocumentDetailById(documentId);
 
         res.json({
@@ -198,9 +166,6 @@ const updateDocument = async (req, res, next) => {
             data: updatedDocument,
         });
     } catch (error) {
-        if (req.file?.path) {
-            await removeFileIfExists(req.file.path);
-        }
         next(error);
     }
 };
