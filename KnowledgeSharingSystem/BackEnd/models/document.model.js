@@ -116,10 +116,74 @@ const findDuplicateDocumentCandidates = async (documentId) => {
     return result.recordset;
 };
 
+const getUploadedDocuments = async ({ ownerUserId = null, status = null }) => {
+    const pool = getPool();
+    const request = pool.request();
+
+    request.input('ownerUserId', sql.Int, ownerUserId);
+    request.input('status', sql.NVarChar(30), status || null);
+
+    const result = await request.query(`
+        SELECT
+            d.documentId,
+            d.title,
+            d.description,
+            d.fileUrl,
+            d.originalFileName,
+            d.fileSizeBytes,
+            d.mimeType,
+            d.fileHash,
+            d.status,
+            d.createdAt,
+            d.updatedAt,
+            d.ownerUserId,
+            u.name AS ownerName,
+            u.email AS ownerEmail,
+            latestReview.decision AS latestReviewDecision,
+            latestReview.note AS latestReviewNote,
+            latestReview.createdAt AS latestReviewedAt
+        FROM dbo.Documents d
+        INNER JOIN dbo.Users u ON u.userId = d.ownerUserId
+        OUTER APPLY (
+            SELECT TOP 1
+                dr.decision,
+                dr.note,
+                dr.createdAt
+            FROM dbo.DocumentReviews dr
+            WHERE dr.documentId = d.documentId
+            ORDER BY dr.createdAt DESC
+        ) latestReview
+        WHERE (@ownerUserId IS NULL OR d.ownerUserId = @ownerUserId)
+          AND (@status IS NULL OR d.status = @status)
+        ORDER BY d.createdAt DESC;
+    `);
+
+    return result.recordset;
+};
+
+const getPendingDocuments = async () => {
+    return getUploadedDocuments({ ownerUserId: null, status: 'pending' });
+};
+
+const reviewDocument = async ({ documentId, moderatorUserId, decision, note = null }) => {
+    const pool = getPool();
+
+    await pool
+        .request()
+        .input('documentId', sql.Int, documentId)
+        .input('moderatorUserId', sql.Int, moderatorUserId)
+        .input('decision', sql.NVarChar(20), decision)
+        .input('note', sql.NVarChar(255), note)
+        .execute('dbo.usp_ReviewDocument');
+};
+
 module.exports = {
     searchApprovedDocuments,
     getDocumentDetailById,
     createDocument,
     updateDocument,
     findDuplicateDocumentCandidates,
+    getUploadedDocuments,
+    getPendingDocuments,
+    reviewDocument,
 };

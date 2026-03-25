@@ -7,6 +7,25 @@ const documentController = require('../controllers/document.controller');
 const router = express.Router();
 
 router.get('/', documentController.getDocuments);
+router.get(
+    '/all-uploaded',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getAllUploadedDocuments
+);
+router.get('/my-uploaded', authMiddleware, documentController.getMyUploadedDocuments);
+router.get(
+    '/pending',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getPendingDocuments
+);
+router.patch(
+    '/:id/review',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.reviewDocument
+);
 router.get('/:id', documentController.getDocumentDetail);
 router.post(
     '/',

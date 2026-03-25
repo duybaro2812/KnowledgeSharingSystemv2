@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const documentModel = require('../models/document.model');
+const notificationModel = require('../models/notification.model');
 const { uploadDocumentBuffer } = require('../services/cloudinary.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
@@ -192,10 +193,178 @@ const getDuplicateCandidates = async (req, res, next) => {
     }
 };
 
+const getAllUploadedDocuments = async (req, res, next) => {
+    try {
+        const { status, ownerUserId } = req.query;
+        let parsedOwnerUserId = null;
+
+        if (ownerUserId !== undefined) {
+            parsedOwnerUserId = Number(ownerUserId);
+
+            if (!Number.isInteger(parsedOwnerUserId) || parsedOwnerUserId <= 0) {
+                const error = new Error('ownerUserId must be a valid integer.');
+                error.statusCode = 400;
+                throw error;
+            }
+        }
+
+        const documents = await documentModel.getUploadedDocuments({
+            ownerUserId: parsedOwnerUserId,
+            status: status || null,
+        });
+
+        res.json({
+            success: true,
+            message: 'Uploaded documents fetched successfully.',
+            data: documents,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getMyUploadedDocuments = async (req, res, next) => {
+    try {
+        const { status } = req.query;
+
+        const documents = await documentModel.getUploadedDocuments({
+            ownerUserId: req.user.userId,
+            status: status || null,
+        });
+
+        res.json({
+            success: true,
+            message: 'Your uploaded documents fetched successfully.',
+            data: documents,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getPendingDocuments = async (req, res, next) => {
+    try {
+        const documents = await documentModel.getPendingDocuments();
+
+        res.json({
+            success: true,
+            message: 'Pending documents fetched successfully.',
+            data: documents,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const reviewDocument = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const { decision, note } = req.body;
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (!['approved', 'rejected'].includes(decision)) {
+            const error = new Error("decision must be either 'approved' or 'rejected'.");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (decision === 'rejected' && (!note || !String(note).trim())) {
+            const error = new Error('A rejection note is required when decision is rejected.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        await documentModel.reviewDocument({
+            documentId,
+            moderatorUserId: req.user.userId,
+            decision,
+            note: note || null,
+        });
+
+        const updatedDocument = await documentModel.getDocumentDetailById(documentId);
+
+        const responseData = {
+            document: updatedDocument,
+            review: {
+                decision,
+                note: note || null,
+                moderatorUserId: req.user.userId,
+            },
+        };
+
+        if (decision === 'rejected') {
+            try {
+                await notificationModel.createNotification({
+                    userId: updatedDocument.ownerUserId,
+                    type: 'document_rejected',
+                    title: 'Document was rejected',
+                    message: 'Your document was rejected because it is invalid.',
+                    metadata: {
+                        documentId,
+                        decision,
+                        note: note || null,
+                    },
+                });
+            } catch (notifyError) {
+                console.error('Failed to create reject notification:', notifyError.message);
+            }
+
+            responseData.userNotification = {
+                userId: updatedDocument.ownerUserId,
+                message: 'Your document was rejected because it is invalid.',
+            };
+        } else {
+            try {
+                await notificationModel.createNotification({
+                    userId: updatedDocument.ownerUserId,
+                    type: 'document_upload_success',
+                    title: 'Upload Success',
+                    message: `Your document "${updatedDocument.title}" has been approved by moderator.`,
+                    metadata: {
+                        documentId,
+                        decision,
+                        note: note || null,
+                    },
+                });
+            } catch (notifyError) {
+                console.error('Failed to create approve notification:', notifyError.message);
+            }
+        }
+
+        res.json({
+            success: true,
+            message:
+                decision === 'approved'
+                    ? 'Document approved successfully.'
+                    : 'Document rejected successfully.',
+            data: responseData,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDocuments,
     getDocumentDetail,
     createDocument,
     updateDocument,
     getDuplicateCandidates,
+    getAllUploadedDocuments,
+    getMyUploadedDocuments,
+    getPendingDocuments,
+    reviewDocument,
 };
