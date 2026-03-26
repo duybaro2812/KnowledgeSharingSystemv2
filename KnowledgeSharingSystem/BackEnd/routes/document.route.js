@@ -26,6 +26,18 @@ router.patch(
     roleMiddleware('admin', 'moderator'),
     documentController.reviewDocument
 );
+router.patch(
+    '/:id/lock',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.lockDocument
+);
+router.patch(
+    '/:id/unlock',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.unlockDocument
+);
 router.get('/:id', documentController.getDocumentDetail);
 router.post(
     '/',

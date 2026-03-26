@@ -177,6 +177,42 @@ const reviewDocument = async ({ documentId, moderatorUserId, decision, note = nu
         .execute('dbo.usp_ReviewDocument');
 };
 
+const updateDocumentStatus = async ({ documentId, status }) => {
+    const pool = getPool();
+
+    await pool
+        .request()
+        .input('documentId', sql.Int, documentId)
+        .input('status', sql.NVarChar(20), status)
+        .query(`
+            UPDATE dbo.Documents
+            SET
+                status = @status,
+                updatedAt = SYSDATETIME()
+            WHERE documentId = @documentId;
+
+            IF @@ROWCOUNT = 0
+            BEGIN
+                THROW 56601, N'Document not found.', 1;
+            END;
+        `);
+};
+
+const logDocumentModerationAction = async ({ userId, action, documentId }) => {
+    const pool = getPool();
+
+    await pool
+        .request()
+        .input('userId', sql.Int, userId)
+        .input('action', sql.NVarChar(100), action)
+        .input('targetType', sql.NVarChar(30), 'document')
+        .input('targetId', sql.Int, documentId)
+        .query(`
+            INSERT INTO dbo.UserActivityLogs (userId, action, targetType, targetId)
+            VALUES (@userId, @action, @targetType, @targetId);
+        `);
+};
+
 module.exports = {
     searchApprovedDocuments,
     getDocumentDetailById,
@@ -186,4 +222,6 @@ module.exports = {
     getUploadedDocuments,
     getPendingDocuments,
     reviewDocument,
+    updateDocumentStatus,
+    logDocumentModerationAction,
 };

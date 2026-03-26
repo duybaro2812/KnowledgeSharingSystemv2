@@ -357,6 +357,150 @@ const reviewDocument = async (req, res, next) => {
     }
 };
 
+const lockDocument = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const { reason } = req.body;
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (!reason || !String(reason).trim()) {
+            const error = new Error('A lock reason is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (document.status === 'hidden') {
+            const error = new Error('Document is already locked.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        await documentModel.updateDocumentStatus({
+            documentId,
+            status: 'hidden',
+        });
+
+        await documentModel.logDocumentModerationAction({
+            userId: req.user.userId,
+            action: 'lock_document',
+            documentId,
+        });
+
+        try {
+            await notificationModel.createNotification({
+                userId: document.ownerUserId,
+                type: 'document_locked',
+                title: 'Document locked for review',
+                message: `Your document "${document.title}" was locked for moderation review.`,
+                metadata: {
+                    documentId,
+                    reason,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create lock notification:', notifyError.message);
+        }
+
+        const updatedDocument = await documentModel.getDocumentDetailById(documentId);
+
+        res.json({
+            success: true,
+            message: 'Document locked successfully.',
+            data: {
+                document: updatedDocument,
+                moderation: {
+                    action: 'locked',
+                    reason,
+                },
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const unlockDocument = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const { note } = req.body;
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (document.status !== 'hidden') {
+            const error = new Error('Only locked documents can be unlocked.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        await documentModel.updateDocumentStatus({
+            documentId,
+            status: 'approved',
+        });
+
+        await documentModel.logDocumentModerationAction({
+            userId: req.user.userId,
+            action: 'unlock_document',
+            documentId,
+        });
+
+        try {
+            await notificationModel.createNotification({
+                userId: document.ownerUserId,
+                type: 'document_unlocked',
+                title: 'Document restored',
+                message: `Your document "${document.title}" was restored and is available again.`,
+                metadata: {
+                    documentId,
+                    note: note || null,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create unlock notification:', notifyError.message);
+        }
+
+        const updatedDocument = await documentModel.getDocumentDetailById(documentId);
+
+        res.json({
+            success: true,
+            message: 'Document unlocked successfully.',
+            data: {
+                document: updatedDocument,
+                moderation: {
+                    action: 'unlocked',
+                    note: note || null,
+                },
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDocuments,
     getDocumentDetail,
@@ -367,4 +511,6 @@ module.exports = {
     getMyUploadedDocuments,
     getPendingDocuments,
     reviewDocument,
+    lockDocument,
+    unlockDocument,
 };
