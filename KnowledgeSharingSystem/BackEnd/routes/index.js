@@ -1,5 +1,6 @@
 const express = require('express');
 const authRoutes = require('./auth.route');
+const categoryRoutes = require('./category.route');
 const documentRoutes = require('./document.route');
 const notificationRoutes = require('./notification.route');
 const userRoutes = require('./user.route');
@@ -14,6 +15,7 @@ router.get('/health', (req, res) => {
 });
 
 router.use('/auth', authRoutes);
+router.use('/categories', categoryRoutes);
 router.use('/documents', documentRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/users', userRoutes);
