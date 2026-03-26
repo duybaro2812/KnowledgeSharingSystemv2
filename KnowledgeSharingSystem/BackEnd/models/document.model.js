@@ -26,14 +26,47 @@ const normalizeCategoryIds = (categoryIds) => {
     return null;
 };
 
-const searchApprovedDocuments = async ({ keyword, categoryId }) => {
+const searchApprovedDocuments = async ({ keyword, categoryId, categoryKeyword }) => {
     const pool = getPool();
 
     const result = await pool
         .request()
         .input('keyword', sql.NVarChar(255), keyword || null)
         .input('categoryId', sql.Int, categoryId || null)
-        .execute('dbo.usp_SearchApprovedDocuments');
+        .input('categoryKeyword', sql.NVarChar(100), categoryKeyword || null)
+        .query(`
+            SELECT DISTINCT
+                d.documentId,
+                d.title,
+                d.description,
+                d.fileUrl,
+                d.originalFileName,
+                d.fileSizeBytes,
+                d.mimeType,
+                d.createdAt,
+                d.updatedAt,
+                u.userId AS ownerUserId,
+                u.name AS ownerName
+            FROM dbo.Documents d
+            INNER JOIN dbo.Users u ON u.userId = d.ownerUserId
+            LEFT JOIN dbo.DocumentCategories dc ON dc.documentId = d.documentId
+            LEFT JOIN dbo.Categories c ON c.categoryId = dc.categoryId
+            WHERE d.status = N'approved'
+              AND (
+                    @keyword IS NULL
+                    OR d.title LIKE N'%' + @keyword + N'%'
+                    OR d.description LIKE N'%' + @keyword + N'%'
+              )
+              AND (
+                    @categoryId IS NULL
+                    OR dc.categoryId = @categoryId
+              )
+              AND (
+                    @categoryKeyword IS NULL
+                    OR c.name LIKE N'%' + @categoryKeyword + N'%'
+              )
+            ORDER BY d.createdAt DESC;
+        `);
 
     return result.recordset;
 };

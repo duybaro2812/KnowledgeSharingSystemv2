@@ -2,7 +2,11 @@ const categoryModel = require('../models/category.model');
 
 const getCategories = async (req, res, next) => {
     try {
-        const categories = await categoryModel.getActiveCategories();
+        const { keyword } = req.query;
+
+        const categories = await categoryModel.getActiveCategories({
+            keyword: keyword ? String(keyword).trim() : null,
+        });
 
         res.json({
             success: true,

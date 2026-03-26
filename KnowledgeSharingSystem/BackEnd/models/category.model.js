@@ -1,9 +1,12 @@
 const { getPool, sql } = require('../utils/db');
 
-const getActiveCategories = async () => {
+const getActiveCategories = async ({ keyword = null } = {}) => {
     const pool = getPool();
 
-    const result = await pool.request().query(`
+    const result = await pool
+        .request()
+        .input('keyword', sql.NVarChar(100), keyword || null)
+        .query(`
         SELECT
             categoryId,
             name,
@@ -11,6 +14,10 @@ const getActiveCategories = async () => {
             isActive
         FROM dbo.Categories
         WHERE isActive = 1
+          AND (
+                @keyword IS NULL
+                OR name LIKE N'%' + @keyword + N'%'
+              )
         ORDER BY name ASC;
     `);
 

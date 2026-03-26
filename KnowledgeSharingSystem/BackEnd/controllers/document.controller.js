@@ -7,7 +7,7 @@ const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buf
 
 const getDocuments = async (req, res, next) => {
     try {
-        const { keyword, categoryId } = req.query;
+        const { keyword, categoryId, categoryKeyword } = req.query;
         const parsedCategoryId = categoryId ? Number(categoryId) : null;
 
         if (categoryId && (!Number.isInteger(parsedCategoryId) || parsedCategoryId <= 0)) {
@@ -19,6 +19,7 @@ const getDocuments = async (req, res, next) => {
         const documents = await documentModel.searchApprovedDocuments({
             keyword,
             categoryId: parsedCategoryId,
+            categoryKeyword: categoryKeyword ? String(categoryKeyword).trim() : null,
         });
 
         res.json({
