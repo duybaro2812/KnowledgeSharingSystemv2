@@ -1,6 +1,10 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const userModel = require('../models/user.model');
+const registrationOtpModel = require('../models/registration-otp.model');
+const { sendRegisterOtpEmail } = require('../services/mail.service');
+
+const OTP_EXPIRE_MINUTES = Number(process.env.OTP_EXPIRE_MINUTES || 10);
 
 const createLoginHandler = (options = {}) => async (req, res, next) => {
     try {
@@ -81,6 +85,140 @@ const createLoginHandler = (options = {}) => async (req, res, next) => {
     }
 };
 
+const validateRegisterPayload = ({ username, name, email, password, confirmPassword }) => {
+    if (!username || !name || !email || !password || !confirmPassword) {
+        const error = new Error('Username, name, email, password, and confirmPassword are required.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (password !== confirmPassword) {
+        const error = new Error('Password and confirmPassword do not match.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (password.length < 6) {
+        const error = new Error('Password must be at least 6 characters.');
+        error.statusCode = 400;
+        throw error;
+    }
+};
+
+const ensureUniqueUserIdentity = async ({ username, email }) => {
+    const existingByUsername = await userModel.findUserByUsername(username);
+    if (existingByUsername) {
+        const error = new Error('Username already exists.');
+        error.statusCode = 409;
+        throw error;
+    }
+
+    const existingByEmail = await userModel.findUserByEmail(email);
+    if (existingByEmail) {
+        const error = new Error('Email already exists.');
+        error.statusCode = 409;
+        throw error;
+    }
+};
+
+const requestRegisterOtp = async (req, res, next) => {
+    try {
+        const { username, name, email, password, confirmPassword } = req.body;
+        validateRegisterPayload({ username, name, email, password, confirmPassword });
+        await ensureUniqueUserIdentity({ username, email });
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+        const expiresAt = new Date(Date.now() + OTP_EXPIRE_MINUTES * 60 * 1000);
+
+        await registrationOtpModel.createOrReplaceRegistrationOtp({
+            username: username.trim(),
+            name: name.trim(),
+            email: email.trim().toLowerCase(),
+            passwordHash,
+            otpCode,
+            expiresAt,
+        });
+
+        const mailResult = await sendRegisterOtpEmail({
+            toEmail: email.trim().toLowerCase(),
+            otpCode,
+            expiresMinutes: OTP_EXPIRE_MINUTES,
+        });
+
+        res.json({
+            success: true,
+            message: 'OTP has been sent to your email.',
+            data: {
+                email: email.trim().toLowerCase(),
+                ...(mailResult.fallback ? { otpPreview: mailResult.otpCode } : {}),
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const verifyRegisterOtp = async (req, res, next) => {
+    try {
+        const { email, otp } = req.body;
+
+        if (!email || !otp) {
+            const error = new Error('Email and OTP are required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const normalizedOtp = String(otp).trim();
+        const otpRecord = await registrationOtpModel.findLatestActiveOtpByEmail(normalizedEmail);
+
+        if (!otpRecord) {
+            const error = new Error('OTP request not found. Please request OTP again.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (new Date(otpRecord.expiresAt).getTime() < Date.now()) {
+            const error = new Error('OTP has expired. Please request a new OTP.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (otpRecord.otpCode !== normalizedOtp) {
+            const error = new Error('Invalid OTP.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        await ensureUniqueUserIdentity({
+            username: otpRecord.username,
+            email: otpRecord.email,
+        });
+
+        const userId = await userModel.registerUser({
+            username: otpRecord.username,
+            name: otpRecord.name,
+            email: otpRecord.email,
+            passwordHash: otpRecord.passwordHash,
+            role: 'user',
+        });
+
+        await userModel.setUserVerified(userId);
+        await registrationOtpModel.markOtpAsUsed(otpRecord.otpId);
+
+        const profile = await userModel.getUserProfileById(userId);
+
+        res.status(201).json({
+            success: true,
+            message: 'User registered successfully.',
+            data: profile,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 const register = async (req, res, next) => {
     try {
         const { username, name, email, password } = req.body;
@@ -90,6 +228,8 @@ const register = async (req, res, next) => {
             error.statusCode = 400;
             throw error;
         }
+
+        await ensureUniqueUserIdentity({ username, email });
 
         const passwordHash = await bcrypt.hash(password, 10);
 
@@ -132,6 +272,8 @@ const getMe = async (req, res, next) => {
 
 module.exports = {
     register,
+    requestRegisterOtp,
+    verifyRegisterOtp,
     login,
     adminLogin,
     getMe,

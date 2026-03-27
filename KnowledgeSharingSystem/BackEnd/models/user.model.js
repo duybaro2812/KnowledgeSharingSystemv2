@@ -40,6 +40,31 @@ const findUserByUsername = async (username) => {
     return result.recordset[0] || null;
 };
 
+const findUserByEmail = async (email) => {
+    const pool = getPool();
+
+    const result = await pool
+        .request()
+        .input('email', sql.NVarChar(150), email)
+        .query(`
+            SELECT
+                userId,
+                username,
+                name,
+                email,
+                passwordHash,
+                role,
+                isActive,
+                isVerified,
+                createdAt,
+                updatedAt
+            FROM dbo.Users
+            WHERE email = @email
+        `);
+
+    return result.recordset[0] || null;
+};
+
 const getUserProfileById = async (userId) => {
     const pool = getPool();
 
@@ -157,9 +182,25 @@ const updatePassword = async ({ userId, passwordHash }) => {
     return result.recordset[0]?.affectedRows || 0;
 };
 
+const setUserVerified = async (userId) => {
+    const pool = getPool();
+
+    await pool
+        .request()
+        .input('userId', sql.Int, userId)
+        .query(`
+            UPDATE dbo.Users
+            SET
+                isVerified = 1,
+                updatedAt = SYSDATETIME()
+            WHERE userId = @userId;
+        `);
+};
+
 module.exports = {
     registerUser,
     findUserByUsername,
+    findUserByEmail,
     getUserProfileById,
     setUserActiveStatus,
     getUsers,
@@ -167,4 +208,5 @@ module.exports = {
     updateMyProfile,
     getUserAuthById,
     updatePassword,
+    setUserVerified,
 };
