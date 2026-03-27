@@ -38,6 +38,12 @@ router.patch(
     roleMiddleware('admin', 'moderator'),
     documentController.unlockDocument
 );
+router.delete(
+    '/:id',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.deleteDocument
+);
 router.get('/:id', documentController.getDocumentDetail);
 router.post(
     '/',

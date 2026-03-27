@@ -246,6 +246,91 @@ const logDocumentModerationAction = async ({ userId, action, documentId }) => {
         `);
 };
 
+const deleteDocumentById = async ({ documentId, deletedByUserId }) => {
+    const pool = getPool();
+
+    await pool
+        .request()
+        .input('documentId', sql.Int, documentId)
+        .input('deletedByUserId', sql.Int, deletedByUserId)
+        .query(`
+            BEGIN TRY
+                BEGIN TRANSACTION;
+
+                DECLARE @reviewIds TABLE (reviewId INT PRIMARY KEY);
+                DECLARE @questionIds TABLE (questionId INT PRIMARY KEY);
+                DECLARE @commentIds TABLE (commentId INT PRIMARY KEY);
+                DECLARE @answerIds TABLE (answerId INT PRIMARY KEY);
+
+                INSERT INTO @reviewIds (reviewId)
+                SELECT reviewId
+                FROM dbo.DocumentReviews
+                WHERE documentId = @documentId;
+
+                INSERT INTO @questionIds (questionId)
+                SELECT questionId
+                FROM dbo.Questions
+                WHERE documentId = @documentId;
+
+                INSERT INTO @commentIds (commentId)
+                SELECT commentId
+                FROM dbo.Comments
+                WHERE documentId = @documentId;
+
+                INSERT INTO @answerIds (answerId)
+                SELECT a.answerId
+                FROM dbo.Answers a
+                INNER JOIN @questionIds q ON q.questionId = a.questionId;
+
+                DELETE r
+                FROM dbo.Reports r
+                WHERE r.documentId = @documentId
+                   OR EXISTS (SELECT 1 FROM @questionIds q WHERE q.questionId = r.questionId)
+                   OR EXISTS (SELECT 1 FROM @commentIds c WHERE c.commentId = r.commentId)
+                   OR EXISTS (SELECT 1 FROM @answerIds a WHERE a.answerId = r.answerId);
+
+                DELETE pt
+                FROM dbo.PointTransactions pt
+                WHERE pt.documentId = @documentId
+                   OR EXISTS (SELECT 1 FROM @reviewIds rv WHERE rv.reviewId = pt.reviewId)
+                   OR EXISTS (SELECT 1 FROM @answerIds a WHERE a.answerId = pt.answerId);
+
+                DELETE FROM dbo.DownloadHistory
+                WHERE documentId = @documentId;
+
+                DELETE FROM dbo.DocumentReviews
+                WHERE documentId = @documentId;
+
+                DELETE FROM dbo.Comments
+                WHERE documentId = @documentId;
+
+                DELETE FROM dbo.Questions
+                WHERE documentId = @documentId;
+
+                DELETE FROM dbo.DocumentCategories
+                WHERE documentId = @documentId;
+
+                DELETE FROM dbo.Documents
+                WHERE documentId = @documentId;
+
+                IF @@ROWCOUNT = 0
+                BEGIN
+                    THROW 56602, N'Document not found.', 1;
+                END;
+
+                INSERT INTO dbo.UserActivityLogs (userId, action, targetType, targetId)
+                VALUES (@deletedByUserId, N'delete_document', N'document', @documentId);
+
+                COMMIT TRANSACTION;
+            END TRY
+            BEGIN CATCH
+                IF @@TRANCOUNT > 0
+                    ROLLBACK TRANSACTION;
+                THROW;
+            END CATCH;
+        `);
+};
+
 module.exports = {
     searchApprovedDocuments,
     getDocumentDetailById,
@@ -257,4 +342,5 @@ module.exports = {
     reviewDocument,
     updateDocumentStatus,
     logDocumentModerationAction,
+    deleteDocumentById,
 };

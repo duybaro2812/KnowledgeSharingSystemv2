@@ -1,7 +1,12 @@
 const crypto = require('crypto');
 const documentModel = require('../models/document.model');
 const notificationModel = require('../models/notification.model');
-const { uploadDocumentBuffer } = require('../services/cloudinary.service');
+const {
+    uploadDocumentBuffer,
+    isCloudinaryAssetUrl,
+    deleteCloudinaryRawByUrl,
+    deleteLocalUploadedFileByUrl,
+} = require('../services/cloudinary.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
 
@@ -502,6 +507,72 @@ const unlockDocument = async (req, res, next) => {
     }
 };
 
+const deleteDocument = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        let storageDeleteResult = null;
+
+        try {
+            if (isCloudinaryAssetUrl(document.fileUrl)) {
+                storageDeleteResult = await deleteCloudinaryRawByUrl(document.fileUrl);
+            } else {
+                storageDeleteResult = await deleteLocalUploadedFileByUrl(document.fileUrl);
+            }
+        } catch (storageError) {
+            const error = new Error(`Failed to delete stored file: ${storageError.message}`);
+            error.statusCode = 500;
+            throw error;
+        }
+
+        await documentModel.deleteDocumentById({
+            documentId,
+            deletedByUserId: req.user.userId,
+        });
+
+        try {
+            await notificationModel.createNotification({
+                userId: document.ownerUserId,
+                type: 'document_deleted',
+                title: 'Document deleted by moderator',
+                message: `Your document "${document.title}" was deleted by moderator/admin.`,
+                metadata: {
+                    documentId,
+                    deletedByUserId: req.user.userId,
+                    deletedByRole: req.user.role,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create delete notification:', notifyError.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Document deleted successfully.',
+            data: {
+                documentId,
+                deletedStorage: storageDeleteResult,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDocuments,
     getDocumentDetail,
@@ -514,4 +585,5 @@ module.exports = {
     reviewDocument,
     lockDocument,
     unlockDocument,
+    deleteDocument,
 };
