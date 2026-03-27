@@ -31,10 +31,15 @@ const ensureCloudinaryConfigured = () => {
 const uploadDocumentBuffer = async ({ buffer, originalFileName }) => {
     ensureCloudinaryConfigured();
 
-    const sanitizedBaseName = (originalFileName || 'document')
-        .replace(/\.[^/.]+$/, '')
+    const sourceName = originalFileName || 'document.bin';
+    const ext = path.extname(sourceName).replace('.', '').toLowerCase() || 'bin';
+    const baseName = sourceName.replace(/\.[^/.]+$/, '');
+
+    const sanitizedBaseName = baseName
         .replace(/[^a-zA-Z0-9-_]/g, '-')
         .slice(0, 80);
+    const uniqueSuffix = Date.now();
+    const publicIdWithExt = `${sanitizedBaseName || 'document'}-${uniqueSuffix}.${ext}`;
 
     const folder = process.env.CLOUDINARY_DOCUMENT_FOLDER || 'knowledge-sharing-system/documents';
 
@@ -43,9 +48,8 @@ const uploadDocumentBuffer = async ({ buffer, originalFileName }) => {
             {
                 folder,
                 resource_type: 'raw',
-                use_filename: true,
-                unique_filename: true,
-                filename_override: sanitizedBaseName || 'document',
+                public_id: publicIdWithExt,
+                overwrite: false,
             },
             (error, result) => {
                 if (error) {

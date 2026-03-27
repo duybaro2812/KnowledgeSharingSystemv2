@@ -94,11 +94,26 @@ a {
   cursor: not-allowed;
 }
 
+.link-btn {
+  border: none;
+  background: transparent;
+  color: var(--brand);
+  padding: 0;
+  text-align: left;
+}
+
 .auth-check {
   display: flex;
   gap: 8px;
   align-items: center;
   color: var(--sub);
+}
+
+.auth-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .app-shell {
@@ -261,6 +276,98 @@ a {
   margin-bottom: 10px;
 }
 
+.topic-picker {
+  position: relative;
+  display: grid;
+  gap: 8px;
+}
+
+.topic-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.topic-input-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.topic-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.topic-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid #aac2e9;
+  border-radius: 999px;
+  background: #f1f6ff;
+  color: #1a2940;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.topic-chip button {
+  border: none;
+  background: transparent;
+  color: #335b9f;
+  font-size: 16px;
+  padding: 0;
+  line-height: 1;
+}
+
+.topic-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid #c9d6ec;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 14px 40px rgba(15, 35, 75, 0.24);
+  z-index: 30;
+  padding: 6px;
+}
+
+.topic-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: #1a2940;
+  font-size: 16px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.topic-option:hover {
+  background: #edf3ff;
+}
+
+.topic-option.create {
+  color: #8ec5ff;
+}
+
+.topic-folder-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.topic-name {
+  color: #1a2940;
+  font-weight: 500;
+}
+
 .cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -287,6 +394,16 @@ a {
   color: var(--sub);
 }
 
+.doc-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.doc-actions button {
+  padding: 6px 10px;
+}
+
 .compact .cat-card p {
   margin: 0;
 }
@@ -308,6 +425,16 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.list-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.list-actions button {
+  padding: 5px 10px;
 }
 
 .badge {
@@ -389,6 +516,47 @@ a {
   padding-left: 18px;
 }
 
+.preview-panel {
+  background: #fcfdff;
+}
+
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.preview-head h2 {
+  margin: 0 0 4px;
+}
+
+.preview-head p {
+  margin: 0;
+  color: var(--sub);
+}
+
+.preview-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.preview-frame-wrap {
+  min-height: 360px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.preview-frame {
+  width: 100%;
+  height: 75vh;
+  border: 0;
+}
+
 .ok {
   margin: 0;
   color: var(--ok);
@@ -423,5 +591,14 @@ a {
   .topbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .auth-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .preview-head {
+    flex-direction: column;
   }
 }

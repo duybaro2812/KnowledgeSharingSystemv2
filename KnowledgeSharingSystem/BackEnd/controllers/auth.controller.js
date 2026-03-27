@@ -2,7 +2,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const userModel = require('../models/user.model');
 const registrationOtpModel = require('../models/registration-otp.model');
-const { sendRegisterOtpEmail } = require('../services/mail.service');
+const { sendRegisterOtpEmail, sendPasswordResetOtpEmail } = require('../services/mail.service');
 
 const OTP_EXPIRE_MINUTES = Number(process.env.OTP_EXPIRE_MINUTES || 10);
 
@@ -219,6 +219,126 @@ const verifyRegisterOtp = async (req, res, next) => {
     }
 };
 
+const requestForgotPasswordOtp = async (req, res, next) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            const error = new Error('Email is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const existingUser = await userModel.findUserByEmail(normalizedEmail);
+
+        if (!existingUser) {
+            const error = new Error('Account with this email does not exist.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+        const expiresAt = new Date(Date.now() + OTP_EXPIRE_MINUTES * 60 * 1000);
+
+        await registrationOtpModel.createOrReplaceForgotPasswordOtp({
+            username: existingUser.username,
+            name: existingUser.name,
+            email: existingUser.email,
+            passwordHash: existingUser.passwordHash,
+            otpCode,
+            expiresAt,
+        });
+
+        const mailResult = await sendPasswordResetOtpEmail({
+            toEmail: existingUser.email,
+            otpCode,
+            expiresMinutes: OTP_EXPIRE_MINUTES,
+        });
+
+        res.json({
+            success: true,
+            message: 'Password reset OTP has been sent to your email.',
+            data: {
+                email: existingUser.email,
+                ...(mailResult.fallback ? { otpPreview: mailResult.otpCode } : {}),
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const resetPasswordWithOtp = async (req, res, next) => {
+    try {
+        const { email, otp, newPassword, confirmPassword } = req.body;
+
+        if (!email || !otp || !newPassword || !confirmPassword) {
+            const error = new Error('Email, OTP, newPassword, and confirmPassword are required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (newPassword !== confirmPassword) {
+            const error = new Error('newPassword and confirmPassword do not match.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (newPassword.length < 6) {
+            const error = new Error('Password must be at least 6 characters.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const normalizedOtp = String(otp).trim();
+
+        const otpRecord = await registrationOtpModel.findLatestActiveOtpByEmail(normalizedEmail);
+
+        if (!otpRecord) {
+            const error = new Error('OTP request not found. Please request OTP again.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (new Date(otpRecord.expiresAt).getTime() < Date.now()) {
+            const error = new Error('OTP has expired. Please request a new OTP.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (otpRecord.otpCode !== normalizedOtp) {
+            const error = new Error('Invalid OTP.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const existingUser = await userModel.findUserByEmail(normalizedEmail);
+        if (!existingUser) {
+            const error = new Error('Account with this email does not exist.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+        await userModel.updatePassword({
+            userId: existingUser.userId,
+            passwordHash: newPasswordHash,
+        });
+
+        await registrationOtpModel.markOtpAsUsed(otpRecord.otpId);
+
+        res.json({
+            success: true,
+            message: 'Password reset successfully. Please login with your new password.',
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 const register = async (req, res, next) => {
     try {
         const { username, name, email, password } = req.body;
@@ -274,6 +394,8 @@ module.exports = {
     register,
     requestRegisterOtp,
     verifyRegisterOtp,
+    requestForgotPasswordOtp,
+    resetPasswordWithOtp,
     login,
     adminLogin,
     getMe,

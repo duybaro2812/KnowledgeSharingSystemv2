@@ -84,8 +84,51 @@ const markOtpAsUsed = async (otpId) => {
         `);
 };
 
+const createOrReplaceForgotPasswordOtp = async ({
+    username,
+    name,
+    email,
+    passwordHash,
+    otpCode,
+    expiresAt,
+}) => {
+    const pool = getPool();
+
+    await pool
+        .request()
+        .input('username', sql.NVarChar(100), username)
+        .input('name', sql.NVarChar(100), name)
+        .input('email', sql.NVarChar(150), email)
+        .input('passwordHash', sql.NVarChar(255), passwordHash)
+        .input('otpCode', sql.NVarChar(10), otpCode)
+        .input('expiresAt', sql.DateTime2(3), expiresAt)
+        .query(`
+            DELETE FROM dbo.RegistrationOtps
+            WHERE email = @email
+              AND isUsed = 0;
+
+            INSERT INTO dbo.RegistrationOtps (
+                username,
+                name,
+                email,
+                passwordHash,
+                otpCode,
+                expiresAt
+            )
+            VALUES (
+                @username,
+                @name,
+                @email,
+                @passwordHash,
+                @otpCode,
+                @expiresAt
+            );
+        `);
+};
+
 module.exports = {
     createOrReplaceRegistrationOtp,
     findLatestActiveOtpByEmail,
     markOtpAsUsed,
+    createOrReplaceForgotPasswordOtp,
 };

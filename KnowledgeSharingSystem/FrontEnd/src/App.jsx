@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiRequest } from './api';
 
 const initialLogin = { username: '', password: '', adminLogin: false };
@@ -34,6 +34,11 @@ function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [loginForm, setLoginForm] = useState(initialLogin);
   const [registerForm, setRegisterForm] = useState(initialRegister);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [forgotOtpPreview, setForgotOtpPreview] = useState('');
   const [authMode, setAuthMode] = useState('login');
   const [otpEmail, setOtpEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -48,10 +53,15 @@ function App() {
   const [myDocs, setMyDocs] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [duplicateByDocId, setDuplicateByDocId] = useState({});
+  const [previewDoc, setPreviewDoc] = useState(null);
 
   const [docFilter, setDocFilter] = useState({ keyword: '', categoryId: '', categoryKeyword: '' });
   const [uploadForm, setUploadForm] = useState({ title: '', description: '', categoryNames: '', file: null });
   const [newCategoryForm, setNewCategoryForm] = useState({ name: '', description: '' });
+  const [topicInput, setTopicInput] = useState('');
+  const [selectedTopics, setSelectedTopics] = useState([]);
+  const [showTopicDropdown, setShowTopicDropdown] = useState(false);
+  const topicPickerRef = useRef(null);
 
   const isModerator = hasModeratorRole(user?.role);
   const visibleTabs = user?.role ? roleTabs[user.role] || roleTabs.user : [];
@@ -134,12 +144,24 @@ function App() {
   }, [activeTab, token, isModerator]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (authMode !== 'verify-otp' || resendCooldown <= 0) return;
+    if (!['verify-otp', 'forgot-verify'].includes(authMode) || resendCooldown <= 0) return;
     const timerId = setInterval(() => {
       setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timerId);
   }, [authMode, resendCooldown]);
+
+  useEffect(() => {
+    const onMouseDown = (e) => {
+      if (!topicPickerRef.current) return;
+      if (!topicPickerRef.current.contains(e.target)) {
+        setShowTopicDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -211,15 +233,183 @@ function App() {
     });
   };
 
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    await call(async () => {
+      if (!forgotEmail.trim()) {
+        throw new Error('Please input your email.');
+      }
+
+      const payload = await apiRequest('/auth/forgot-password/request-otp', {
+        method: 'POST',
+        body: { email: forgotEmail.trim().toLowerCase() },
+      });
+
+      setForgotEmail(payload.data.email);
+      setForgotOtpPreview(payload.data.otpPreview || '');
+      setAuthMode('forgot-verify');
+      setResendCooldown(60);
+      setStatus('Password reset OTP sent. Please check your email.');
+    });
+  };
+
+  const handleResendForgotOtp = async () => {
+    await call(async () => {
+      const payload = await apiRequest('/auth/forgot-password/request-otp', {
+        method: 'POST',
+        body: { email: forgotEmail.trim().toLowerCase() },
+      });
+      setForgotEmail(payload.data.email);
+      setForgotOtpPreview(payload.data.otpPreview || '');
+      setResendCooldown(60);
+      setStatus('Password reset OTP resent. Please check your email.');
+    });
+  };
+
+  const handleResetPasswordWithOtp = async (e) => {
+    e.preventDefault();
+    await call(async () => {
+      await apiRequest('/auth/forgot-password/reset', {
+        method: 'POST',
+        body: {
+          email: forgotEmail.trim().toLowerCase(),
+          otp: forgotOtp.trim(),
+          newPassword: forgotNewPassword,
+          confirmPassword: forgotConfirmPassword,
+        },
+      });
+
+      setStatus('Password reset successful. Please login now.');
+      setAuthMode('login');
+      setForgotOtp('');
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotOtpPreview('');
+      setResendCooldown(0);
+    });
+  };
+
   const resolveFileUrl = (fileUrl) => {
     if (!fileUrl) return '';
     if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) return fileUrl;
     return `http://localhost:3000${fileUrl}`;
   };
 
+  const buildPreviewUrl = ({ fileUrl, mimeType, originalFileName }) => {
+    const resolved = resolveFileUrl(fileUrl);
+    if (!resolved) {
+      return { url: '', reason: 'No file URL found.', fallbackUrls: [] };
+    }
+
+    const lowerMime = String(mimeType || '').toLowerCase();
+    const isPdf = lowerMime.includes('pdf') || resolved.toLowerCase().endsWith('.pdf');
+    if (isPdf) return { url: resolved, reason: '', fallbackUrls: [] };
+
+    const isOfficeDoc =
+      lowerMime.includes('word') ||
+      lowerMime.includes('officedocument') ||
+      resolved.toLowerCase().endsWith('.doc') ||
+      resolved.toLowerCase().endsWith('.docx') ||
+      resolved.toLowerCase().endsWith('.ppt') ||
+      resolved.toLowerCase().endsWith('.pptx') ||
+      resolved.toLowerCase().endsWith('.xls') ||
+      resolved.toLowerCase().endsWith('.xlsx');
+
+    if (isOfficeDoc) {
+      const cloudinaryRawNoExt =
+        resolved.includes('/res.cloudinary.com/') &&
+        resolved.includes('/raw/upload/') &&
+        !/\.(doc|docx|ppt|pptx|xls|xlsx|pdf)(\?|$)/i.test(resolved);
+
+      let candidateUrl = resolved;
+      if (cloudinaryRawNoExt) {
+        const fallbackExt = String(originalFileName || '')
+          .split('.')
+          .pop()
+          ?.toLowerCase();
+        if (fallbackExt) {
+          candidateUrl = `${resolved}.${fallbackExt}`;
+        }
+      }
+
+      const candidates = [resolved];
+      if (candidateUrl !== resolved) candidates.push(candidateUrl);
+
+      const isLocalHostFile = candidates.every(
+        (url) => url.includes('localhost') || url.includes('127.0.0.1'),
+      );
+
+      if (isLocalHostFile) {
+        return {
+          url: '',
+          reason:
+            'This Office file is stored on localhost, so web preview cannot load it. Use "Open in new tab", or re-upload to Cloudinary for in-app preview.',
+          fallbackUrl: '',
+        };
+      }
+
+      const viewerUrls = [];
+      for (const candidate of candidates) {
+        viewerUrls.push(`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(candidate)}`);
+        viewerUrls.push(`https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(candidate)}`);
+      }
+
+      const dedupedViewerUrls = [...new Set(viewerUrls)];
+
+      return {
+        url: dedupedViewerUrls[0] || '',
+        fallbackUrls: dedupedViewerUrls.slice(1),
+        reason: '',
+      };
+    }
+
+    return { url: resolved, reason: '', fallbackUrls: [] };
+  };
+
+  const openPreview = (doc) => {
+    const preview = buildPreviewUrl(doc);
+    setPreviewDoc({
+      title: doc.title,
+      originalFileName: doc.originalFileName,
+      fileUrl: resolveFileUrl(doc.fileUrl),
+      previewUrl: preview.url,
+      fallbackPreviewUrls: preview.fallbackUrls || [],
+      previewReason: preview.reason,
+      mimeType: doc.mimeType,
+    });
+  };
+
   const parseCategoryNames = (raw) => {
     if (!raw) return [];
     return [...new Set(raw.split(',').map((name) => name.trim()).filter(Boolean))];
+  };
+
+  const syncSelectedTopicsToForm = (nextTopics) => {
+    setSelectedTopics(nextTopics);
+    setUploadForm((prev) => ({ ...prev, categoryNames: nextTopics.join(', ') }));
+  };
+
+  const addTopic = (name) => {
+    const normalized = String(name || '').trim();
+    if (!normalized) return;
+    if (selectedTopics.some((item) => item.toLowerCase() === normalized.toLowerCase())) return;
+    syncSelectedTopicsToForm([...selectedTopics, normalized]);
+    setTopicInput('');
+    setShowTopicDropdown(false);
+  };
+
+  const removeTopic = (name) => {
+    syncSelectedTopicsToForm(selectedTopics.filter((item) => item !== name));
+  };
+
+  const onTopicInputKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      if (topicInput.trim()) addTopic(topicInput);
+    }
+    if (e.key === 'Backspace' && !topicInput && selectedTopics.length) {
+      removeTopic(selectedTopics[selectedTopics.length - 1]);
+    }
   };
 
   const ensureCategoryIdsByNames = async (names) => {
@@ -289,6 +479,9 @@ function App() {
       await apiRequest('/documents', { method: 'POST', token, body: fd, isForm: true });
       setStatus('Upload successful. Document is pending review.');
       setUploadForm({ title: '', description: '', categoryNames: '', file: null });
+      setSelectedTopics([]);
+      setTopicInput('');
+      setShowTopicDropdown(false);
       await loadMyDocuments();
       await loadPendingDocuments();
       await loadCategories();
@@ -354,6 +547,17 @@ function App() {
     pending: myDocs.filter((d) => d.status === 'pending').length,
   };
 
+  const topicSuggestions = categories.filter((c) => {
+    const name = c.name || '';
+    const notPicked = !selectedTopics.some((item) => item.toLowerCase() === name.toLowerCase());
+    if (!notPicked) return false;
+    if (!topicInput.trim()) return true;
+    return name.toLowerCase().includes(topicInput.toLowerCase().trim());
+  });
+  const visibleTopicSuggestions = topicInput.trim()
+    ? topicSuggestions.slice(0, 12)
+    : topicSuggestions.slice(0, 5);
+
   if (!token) {
     return (
       <div className="auth-shell">
@@ -380,14 +584,27 @@ function App() {
               value={loginForm.password}
               onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
             />
-            <label className="auth-check">
-              <input
-                type="checkbox"
-                checked={loginForm.adminLogin}
-                onChange={(e) => setLoginForm((p) => ({ ...p, adminLogin: e.target.checked }))}
-              />
-              Use admin login endpoint
-            </label>
+            <div className="auth-row">
+              <label className="auth-check">
+                <input
+                  type="checkbox"
+                  checked={loginForm.adminLogin}
+                  onChange={(e) => setLoginForm((p) => ({ ...p, adminLogin: e.target.checked }))}
+                />
+                Use admin login endpoint
+              </label>
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  setAuthMode('forgot-password');
+                  setError('');
+                  setStatus('');
+                }}
+              >
+                Forgot password?
+              </button>
+            </div>
             <button type="submit" className="primary-btn">Login</button>
             <button
               type="button"
@@ -399,6 +616,77 @@ function App() {
             >
               Create account
             </button>
+            {error && <p className="err">{error}</p>}
+          </form>
+        )}
+
+        {authMode === 'forgot-password' && (
+          <form className="auth-card" onSubmit={handleForgotPassword}>
+            <h2>Forgot password</h2>
+            <input
+              placeholder="Your account email"
+              type="email"
+              value={forgotEmail}
+              onChange={(e) => setForgotEmail(e.target.value)}
+            />
+            <button type="submit" className="primary-btn">Send reset OTP</button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('login');
+                setError('');
+                setStatus('');
+              }}
+            >
+              Back to login
+            </button>
+            {error && <p className="err">{error}</p>}
+          </form>
+        )}
+
+        {authMode === 'forgot-verify' && (
+          <form className="auth-card" onSubmit={handleResetPasswordWithOtp}>
+            <h2>Reset password</h2>
+            <input value={forgotEmail} readOnly />
+            <input
+              placeholder="Enter OTP code"
+              value={forgotOtp}
+              onChange={(e) => setForgotOtp(e.target.value)}
+            />
+            <input
+              placeholder="New password"
+              type="password"
+              value={forgotNewPassword}
+              onChange={(e) => setForgotNewPassword(e.target.value)}
+            />
+            <input
+              placeholder="Confirm new password"
+              type="password"
+              value={forgotConfirmPassword}
+              onChange={(e) => setForgotConfirmPassword(e.target.value)}
+            />
+            <div className="auth-actions">
+              <button type="submit" className="primary-btn">Reset password</button>
+              <button
+                type="button"
+                onClick={handleResendForgotOtp}
+                disabled={resendCooldown > 0}
+                title={resendCooldown > 0 ? `Wait ${resendCooldown}s` : 'Resend OTP'}
+              >
+                {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend OTP'}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('login');
+                setError('');
+                setStatus('');
+              }}
+            >
+              Back to login
+            </button>
+            {forgotOtpPreview && <p className="hint">Dev OTP: {forgotOtpPreview}</p>}
             {error && <p className="err">{error}</p>}
           </form>
         )}
@@ -541,25 +829,15 @@ function App() {
           <>
             <section className="panel">
               <h2>Discover Documents</h2>
-              <div className="filters">
-                <input
-                  placeholder="category keyword"
-                  value={docFilter.categoryKeyword}
-                  onChange={(e) => setDocFilter((p) => ({ ...p, categoryKeyword: e.target.value }))}
-                />
-                <input
-                  placeholder="category id"
-                  value={docFilter.categoryId}
-                  onChange={(e) => setDocFilter((p) => ({ ...p, categoryId: e.target.value }))}
-                />
-                <button onClick={() => call(loadDocuments)}>Apply filters</button>
-              </div>
               <div className="cards-grid">
                 {docs.map((d) => (
                   <article key={d.documentId} className="doc-card">
                     <h3>{d.title}</h3>
                     <p>{d.description || 'No description'}</p>
-                    <a href={resolveFileUrl(d.fileUrl)} target="_blank" rel="noreferrer">Open file</a>
+                    <div className="doc-actions">
+                      <button type="button" onClick={() => openPreview(d)}>Preview</button>
+                      <a href={resolveFileUrl(d.fileUrl)} target="_blank" rel="noreferrer">Open file</a>
+                    </div>
                   </article>
                 ))}
               </div>
@@ -571,7 +849,10 @@ function App() {
                 {myDocs.map((d) => (
                   <li key={d.documentId}>
                     <span>#{d.documentId} - {d.title}</span>
-                    <span className={`badge ${d.status}`}>{d.status}</span>
+                    <span className="list-actions">
+                      <button type="button" onClick={() => openPreview(d)}>Preview</button>
+                      <span className={`badge ${d.status}`}>{d.status}</span>
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -593,22 +874,65 @@ function App() {
                 value={uploadForm.description}
                 onChange={(e) => setUploadForm((p) => ({ ...p, description: e.target.value }))}
               />
-              <input
-                list="category-suggestions"
-                placeholder="Topic/Category names (Physics, Algebra)"
-                value={uploadForm.categoryNames}
-                onChange={(e) => setUploadForm((p) => ({ ...p, categoryNames: e.target.value }))}
-              />
+              <div className="topic-picker" ref={topicPickerRef}>
+                <div className="topic-input-row">
+                  <input
+                    placeholder="Search course/topic (Physics, Algebra...)"
+                    value={topicInput}
+                    onFocus={() => setShowTopicDropdown(true)}
+                    onChange={(e) => {
+                      setTopicInput(e.target.value);
+                      setShowTopicDropdown(true);
+                    }}
+                    onKeyDown={onTopicInputKeyDown}
+                  />
+                  <button type="button" onClick={() => topicInput.trim() && addTopic(topicInput)}>
+                    Add
+                  </button>
+                </div>
+                {!!selectedTopics.length && (
+                  <div className="topic-chip-list">
+                    {selectedTopics.map((topic) => (
+                      <span key={topic} className="topic-chip">
+                        {topic}
+                        <button type="button" onClick={() => removeTopic(topic)}>x</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {showTopicDropdown && (
+                  <div className="topic-dropdown">
+                    {visibleTopicSuggestions.length > 0 ? (
+                      visibleTopicSuggestions.map((item) => (
+                        <button
+                          type="button"
+                          className="topic-option"
+                          key={item.categoryId}
+                          onClick={() => addTopic(item.name)}
+                        >
+                          <span className="topic-folder-icon" aria-hidden="true">📁</span>
+                          <span className="topic-name">{item.name}</span>
+                        </button>
+                      ))
+                    ) : (
+                      <button
+                        type="button"
+                        className="topic-option create"
+                        onClick={() => topicInput.trim() && addTopic(topicInput)}
+                      >
+                        Create new topic: "{topicInput.trim()}"
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
               <input
                 type="file"
                 onChange={(e) => setUploadForm((p) => ({ ...p, file: e.target.files?.[0] || null }))}
               />
               <button className="primary-btn" type="submit">Upload</button>
             </form>
-            <datalist id="category-suggestions">
-              {categories.map((c) => <option key={c.categoryId} value={c.name} />)}
-            </datalist>
-            <p className="hint">Multiple categories: separate by comma.</p>
+            <p className="hint">Type to search and pick multiple topics. Press Enter to add quickly.</p>
           </section>
         )}
 
@@ -626,7 +950,7 @@ function App() {
                     <h3>#{d.documentId} - {d.title}</h3>
                     <p>Owner: {d.ownerName} ({d.ownerEmail})</p>
                     <p>
-                      File: <a href={resolveFileUrl(d.fileUrl)} target="_blank" rel="noreferrer">Open for review</a>
+                      File: <button type="button" onClick={() => openPreview(d)}>Open for review</button>
                     </p>
                     <div className="action-row">
                       <button onClick={() => loadDuplicateCandidates(d.documentId)}>Check duplicate</button>
@@ -699,6 +1023,53 @@ function App() {
                 </article>
               ))}
             </div>
+          </section>
+        )}
+
+        {previewDoc && (
+          <section className="panel preview-panel">
+            <div className="preview-head">
+              <div>
+                <h2>Document reader</h2>
+                <p>{previewDoc.title} ({previewDoc.originalFileName})</p>
+              </div>
+              <div className="preview-head-actions">
+                <a href={previewDoc.fileUrl} target="_blank" rel="noreferrer">Open in new tab</a>
+                {!!previewDoc.fallbackPreviewUrls?.length && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPreviewDoc((prev) => {
+                        if (!prev?.fallbackPreviewUrls?.length) return prev;
+                        const [nextUrl, ...remaining] = prev.fallbackPreviewUrls;
+                        return {
+                          ...prev,
+                          previewUrl: nextUrl,
+                          fallbackPreviewUrls: [...remaining, prev.previewUrl],
+                        };
+                      })
+                    }
+                  >
+                    Switch viewer
+                  </button>
+                )}
+                <button type="button" onClick={() => setPreviewDoc(null)}>Close</button>
+              </div>
+            </div>
+            <div className="preview-frame-wrap">
+              {previewDoc.previewUrl ? (
+                <iframe
+                  title={`preview-${previewDoc.title}`}
+                  src={previewDoc.previewUrl}
+                  className="preview-frame"
+                />
+              ) : (
+                <p>{previewDoc.previewReason || 'No preview available for this file type.'}</p>
+              )}
+            </div>
+            <p className="hint">
+              If your document is local-only or blocked by remote viewer policy, use "Open in new tab".
+            </p>
           </section>
         )}
       </main>

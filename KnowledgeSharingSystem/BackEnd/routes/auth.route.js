@@ -7,6 +7,8 @@ const router = express.Router();
 router.post('/register', authController.register);
 router.post('/register/request-otp', authController.requestRegisterOtp);
 router.post('/register/verify-otp', authController.verifyRegisterOtp);
+router.post('/forgot-password/request-otp', authController.requestForgotPasswordOtp);
+router.post('/forgot-password/reset', authController.resetPasswordWithOtp);
 router.post('/login', authController.login);
 router.post('/login/admin', authController.adminLogin);
 router.get('/me', authMiddleware, authController.getMe);

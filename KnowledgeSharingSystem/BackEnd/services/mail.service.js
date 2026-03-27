@@ -54,6 +54,45 @@ const sendRegisterOtpEmail = async ({ toEmail, otpCode, expiresMinutes = 10 }) =
     };
 };
 
+const sendPasswordResetOtpEmail = async ({ toEmail, otpCode, expiresMinutes = 10 }) => {
+    const transporter = buildTransporter();
+
+    if (!transporter) {
+        if (process.env.OTP_DEV_FALLBACK === 'true') {
+            return {
+                delivered: false,
+                fallback: true,
+                otpCode,
+            };
+        }
+
+        throw new Error('SMTP is not configured. Please set SMTP_HOST/SMTP_USER/SMTP_PASS.');
+    }
+
+    const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+
+    await transporter.sendMail({
+        from,
+        to: toEmail,
+        subject: 'Your OTP for password reset',
+        text: `Your password reset OTP is ${otpCode}. It expires in ${expiresMinutes} minutes.`,
+        html: `
+            <div style="font-family: Segoe UI, Arial, sans-serif; padding: 16px;">
+                <h2>Password Reset OTP</h2>
+                <p>Your OTP code is:</p>
+                <p style="font-size: 24px; font-weight: 700; letter-spacing: 4px;">${otpCode}</p>
+                <p>This code expires in ${expiresMinutes} minutes.</p>
+            </div>
+        `,
+    });
+
+    return {
+        delivered: true,
+        fallback: false,
+    };
+};
+
 module.exports = {
     sendRegisterOtpEmail,
+    sendPasswordResetOtpEmail,
 };
