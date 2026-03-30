@@ -7,5 +7,9 @@ export function createModerationController(input) {
     onLock: (docId) => input.lockUnlockDelete(docId, "lock"),
     onUnlock: (docId) => input.lockUnlockDelete(docId, "unlock"),
     onDelete: (docId) => input.lockUnlockDelete(docId, "delete"),
+    onResolveReportedUnlock: (docId) =>
+      input.resolveReportedDocument(docId, "unlock"),
+    onResolveReportedDelete: (docId) =>
+      input.resolveReportedDocument(docId, "delete"),
   };
 }

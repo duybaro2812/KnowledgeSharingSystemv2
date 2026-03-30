@@ -16,7 +16,12 @@ function DashboardShell(props) {
     status,
     error,
     previewDoc,
-    setPreviewDoc,
+    closePreview,
+    getDocReactionCounts,
+    toggleLike,
+    toggleDislike,
+    toggleSave,
+    onReportFromPreview,
   } = props;
 
   return (
@@ -37,8 +42,29 @@ function DashboardShell(props) {
         {activeTab === "moderation" && <ModerationTab {...props} />}
         {activeTab === "notifications" && <NotificationsTab {...props} />}
         {activeTab === "categories" && <CategoriesTab {...props} />}
+        {activeTab === "reader" && (
+          <PreviewPanel
+            previewDoc={previewDoc}
+            onClose={closePreview}
+            getDocReactionCounts={getDocReactionCounts}
+            onToggleLike={toggleLike}
+            onToggleDislike={toggleDislike}
+            onToggleSave={toggleSave}
+            onReport={onReportFromPreview}
+          />
+        )}
 
-        <PreviewPanel previewDoc={previewDoc} setPreviewDoc={setPreviewDoc} />
+        {activeTab !== "reader" && (
+          <PreviewPanel
+            previewDoc={previewDoc}
+            onClose={closePreview}
+            getDocReactionCounts={getDocReactionCounts}
+            onToggleLike={toggleLike}
+            onToggleDislike={toggleDislike}
+            onToggleSave={toggleSave}
+            onReport={onReportFromPreview}
+          />
+        )}
       </main>
     </div>
   );

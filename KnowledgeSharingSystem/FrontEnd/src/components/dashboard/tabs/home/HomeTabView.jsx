@@ -21,20 +21,34 @@ function HomeTabView(props) {
         <h2>Continue reading</h2>
         <div className="reading-row">
           {model.docs.slice(0, 8).map((d) => (
-            <article key={d.documentId} className="reading-card">
-              <button type="button" className="reading-thumb" onClick={() => controller.onPreviewDoc(d)}>
+            <article
+              key={d.documentId}
+              className={`reading-card ${d.isLockedForPoints ? "locked" : ""}`}
+            >
+              <button
+                type="button"
+                className="reading-card-click"
+                onClick={() => controller.onSelectDocumentCard(d)}
+              >
+                <span className="sr-only">Open document {d.title}</span>
+              </button>
+
+              <button
+                type="button"
+                className="reading-thumb"
+                onClick={() => controller.onSelectDocumentCard(d)}
+              >
                 <span>DOC</span>
               </button>
+
               <h3 title={d.title}>{d.title}</h3>
               <p>{d.description || "Shared material"}</p>
-              <div className="doc-actions">
-                <button type="button" onClick={() => controller.onPreviewDoc(d)}>
-                  Preview
-                </button>
-                <a href={controller.resolveUrl(d.fileUrl)} target="_blank" rel="noreferrer">
-                  Open file
-                </a>
-              </div>
+
+              <small className="reading-meta">
+                {d.isLockedForPoints
+                  ? `Locked • Need ${d.requiredPoints} points`
+                  : "Click to preview"}
+              </small>
             </article>
           ))}
         </div>

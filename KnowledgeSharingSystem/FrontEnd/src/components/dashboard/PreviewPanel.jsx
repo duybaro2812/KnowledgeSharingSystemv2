@@ -1,7 +1,21 @@
 function PreviewPanel(props) {
-  const { previewDoc, setPreviewDoc } = props;
+  const {
+    previewDoc,
+    onClose,
+    getDocReactionCounts,
+    onToggleLike,
+    onToggleDislike,
+    onToggleSave,
+    onReport,
+  } = props;
 
   if (!previewDoc) return null;
+
+  const isLocked = !!previewDoc.isLockedForPoints;
+  const docId = Number(previewDoc.documentId || 0);
+  const reaction = getDocReactionCounts
+    ? getDocReactionCounts(docId)
+    : { likeCount: 0, dislikeCount: 0, liked: false, disliked: false, saved: false };
 
   return (
     <section className="panel preview-panel">
@@ -13,49 +27,80 @@ function PreviewPanel(props) {
           </p>
         </div>
         <div className="preview-head-actions">
-          <a href={previewDoc.fileUrl} target="_blank" rel="noreferrer">
-            Open in new tab
-          </a>
-          {!!previewDoc.fallbackPreviewUrls?.length && (
-            <button
-              type="button"
-              onClick={() =>
-                setPreviewDoc((prev) => {
-                  if (!prev?.fallbackPreviewUrls?.length) return prev;
-                  const [nextUrl, ...remaining] = prev.fallbackPreviewUrls;
-                  return {
-                    ...prev,
-                    previewUrl: nextUrl,
-                    fallbackPreviewUrls: [...remaining, prev.previewUrl],
-                  };
-                })
-              }
-            >
-              Switch viewer
-            </button>
-          )}
-          <button type="button" onClick={() => setPreviewDoc(null)}>
+          <button type="button" onClick={onClose}>
             Close
           </button>
         </div>
       </div>
+
+      {!isLocked && (
+        <div className="preview-actions">
+          <a className="preview-cta" href={previewDoc.fileUrl} target="_blank" rel="noreferrer">
+            Download
+          </a>
+          <button
+            type="button"
+            className={reaction.liked ? "active-like" : ""}
+            onClick={() => onToggleLike && onToggleLike(docId)}
+          >
+            👍 {reaction.likeCount || 0}
+          </button>
+          <button
+            type="button"
+            className={reaction.disliked ? "active-dislike" : ""}
+            onClick={() => onToggleDislike && onToggleDislike(docId)}
+          >
+            👎 {reaction.dislikeCount || 0}
+          </button>
+          <button type="button" onClick={() => onToggleSave && onToggleSave(docId)}>
+            {reaction.saved ? "Saved" : "Save"}
+          </button>
+          <button
+            type="button"
+            className="danger-ghost"
+            onClick={() => onReport && onReport(docId)}
+          >
+            Report Document
+          </button>
+        </div>
+      )}
+
       <div className="preview-frame-wrap">
-        {previewDoc.previewUrl ? (
-          <iframe
-            title={`preview-${previewDoc.title}`}
-            src={previewDoc.previewUrl}
-            className="preview-frame"
-          />
-        ) : (
-          <p>{previewDoc.previewReason || "No preview available for this file type."}</p>
+        <div className={isLocked ? "preview-content blurred" : "preview-content"}>
+          {previewDoc.previewUrl ? (
+            <iframe
+              title={`preview-${previewDoc.title}`}
+              src={previewDoc.previewUrl}
+              className="preview-frame"
+            />
+          ) : (
+            <p>{previewDoc.previewReason || "No preview available for this file type."}</p>
+          )}
+        </div>
+
+        {isLocked && (
+          <div className="preview-lock-overlay">
+            <h3>🔒 This is a preview</h3>
+            <p>
+              You need at least <b>{previewDoc.requiredPoints}</b> points to unlock this
+              document.
+            </p>
+            <div className="lock-overlay-actions">
+              <button type="button">Earn points</button>
+              <button
+                type="button"
+                className="danger-ghost"
+                onClick={() => onReport && onReport(docId)}
+              >
+                Report Document
+              </button>
+            </div>
+          </div>
         )}
       </div>
-      <p className="hint">
-        If your document is local-only or blocked by remote viewer policy, use
-        "Open in new tab".
-      </p>
     </section>
   );
 }
 
 export default PreviewPanel;
+

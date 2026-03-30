@@ -43,7 +43,7 @@ function CategoriesTabView(props) {
               {model.categoryDocs.map((d) => (
                 <li key={d.documentId}>
                   <span>
-                    #{d.documentId} - {d.title}
+                      #{d.documentId} - {d.title}
                   </span>
                   <span className="list-actions">
                     <button type="button" onClick={() => controller.onPreviewDoc(d)}>

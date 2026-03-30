@@ -327,6 +327,12 @@ const deleteDocumentById = async ({
                 DELETE FROM dbo.DocumentCategories
                 WHERE documentId = @documentId;
 
+                DELETE FROM dbo.DocumentReactions
+                WHERE documentId = @documentId;
+
+                DELETE FROM dbo.SavedDocuments
+                WHERE documentId = @documentId;
+
                 DELETE FROM dbo.Documents
                 WHERE documentId = @documentId;
 

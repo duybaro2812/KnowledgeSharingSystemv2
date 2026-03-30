@@ -79,6 +79,7 @@ export const buildPreviewUrl = ({ fileUrl, mimeType, originalFileName }) => {
 export const createOpenPreview = (setPreviewDoc) => (doc) => {
   const preview = buildPreviewUrl(doc);
   setPreviewDoc({
+    documentId: doc.documentId,
     title: doc.title,
     originalFileName: doc.originalFileName,
     fileUrl: resolveFileUrl(doc.fileUrl),
@@ -86,5 +87,7 @@ export const createOpenPreview = (setPreviewDoc) => (doc) => {
     fallbackPreviewUrls: preview.fallbackUrls || [],
     previewReason: preview.reason,
     mimeType: doc.mimeType,
+    isLockedForPoints: !!doc.isLockedForPoints,
+    requiredPoints: Number(doc.requiredPoints || 0),
   });
 };

@@ -6,7 +6,7 @@ export function createCategoriesController(input) {
     onChangeCategoryDescription: (value) =>
       input.setNewCategoryForm((p) => ({ ...p, description: value })),
     onSelectCategory: (category) => input.handleCategoryClick(category),
-    onPreviewDoc: (doc) => input.openPreview(doc),
+    onPreviewDoc: (doc) => input.openPreviewReload(doc),
     resolveUrl: (url) => input.resolveFileUrl(url),
   };
 }
