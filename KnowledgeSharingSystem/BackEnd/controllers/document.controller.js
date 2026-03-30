@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const documentModel = require('../models/document.model');
+const reportModel = require('../models/report.model');
 const notificationModel = require('../models/notification.model');
+const userModel = require('../models/user.model');
 const {
     uploadDocumentBuffer,
     isCloudinaryAssetUrl,
@@ -9,6 +11,36 @@ const {
 } = require('../services/cloudinary.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+
+const deleteStoredDocumentFile = async (fileUrl) => {
+    if (isCloudinaryAssetUrl(fileUrl)) {
+        return deleteCloudinaryRawByUrl(fileUrl);
+    }
+
+    return deleteLocalUploadedFileByUrl(fileUrl);
+};
+
+const notifyModerationTeam = async ({ type, title, message, metadata = null }) => {
+    const moderationUsers = await userModel.getActiveModeratorsAndAdmins();
+
+    if (!moderationUsers.length) {
+        return 0;
+    }
+
+    await Promise.all(
+        moderationUsers.map((moderator) =>
+            notificationModel.createNotification({
+                userId: moderator.userId,
+                type,
+                title,
+                message,
+                metadata,
+            })
+        )
+    );
+
+    return moderationUsers.length;
+};
 
 const getDocuments = async (req, res, next) => {
     try {
@@ -256,6 +288,279 @@ const getPendingDocuments = async (req, res, next) => {
             success: true,
             message: 'Pending documents fetched successfully.',
             data: documents,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const createDocumentReport = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const { reason } = req.body;
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (!reason || !String(reason).trim()) {
+            const error = new Error('Report reason is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (document.status === 'rejected') {
+            const error = new Error('This document cannot be reported.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        let reportResult;
+
+        try {
+            reportResult = await reportModel.createDocumentReport({
+                documentId,
+                reporterUserId: req.user.userId,
+                reason: String(reason).trim(),
+            });
+        } catch (error) {
+            if (error.number === 56702 || error.number === 56703) {
+                error.statusCode = 409;
+            }
+            throw error;
+        }
+
+        if (reportResult.wasAutoLocked) {
+            try {
+                await notificationModel.createNotification({
+                    userId: reportResult.ownerUserId,
+                    type: 'document_auto_locked',
+                    title: 'Document locked due to reports',
+                    message: `Your document "${document.title}" was auto-locked because it received more than ${reportModel.REPORT_AUTO_LOCK_THRESHOLD} reports.`,
+                    metadata: {
+                        documentId,
+                        uniqueReporterCount: reportResult.uniqueReporterCount,
+                    },
+                });
+            } catch (notifyError) {
+                console.error('Failed to create auto-lock notification for owner:', notifyError.message);
+            }
+
+            try {
+                await notifyModerationTeam({
+                    type: 'document_report_threshold',
+                    title: 'Document needs moderation review',
+                    message: `Document "${document.title}" exceeded report threshold and was auto-locked.`,
+                    metadata: {
+                        documentId,
+                        uniqueReporterCount: reportResult.uniqueReporterCount,
+                        threshold: reportModel.REPORT_AUTO_LOCK_THRESHOLD,
+                    },
+                });
+            } catch (notifyError) {
+                console.error('Failed to notify moderation team:', notifyError.message);
+            }
+        }
+
+        res.status(201).json({
+            success: true,
+            message: reportResult.wasAutoLocked
+                ? 'Report submitted. Document was auto-locked and sent to moderation.'
+                : 'Report submitted successfully.',
+            data: {
+                reportId: reportResult.reportId,
+                documentId,
+                uniqueReporterCount: reportResult.uniqueReporterCount,
+                autoLocked: Boolean(reportResult.wasAutoLocked),
+                lockThreshold: reportModel.REPORT_AUTO_LOCK_THRESHOLD,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getPendingReportedDocuments = async (req, res, next) => {
+    try {
+        const reportedDocuments = await reportModel.getPendingDocumentReportQueue();
+
+        res.json({
+            success: true,
+            message: 'Pending reported documents fetched successfully.',
+            data: reportedDocuments,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const resolveReportedDocument = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const { action, note, penaltyPoints } = req.body;
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (!['unlock', 'delete'].includes(action)) {
+            const error = new Error("action must be either 'unlock' or 'delete'.");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        let parsedPenaltyPoints = 0;
+
+        if (penaltyPoints !== undefined && penaltyPoints !== null && penaltyPoints !== '') {
+            parsedPenaltyPoints = Number(penaltyPoints);
+
+            if (!Number.isInteger(parsedPenaltyPoints) || parsedPenaltyPoints < 0) {
+                const error = new Error('penaltyPoints must be a non-negative integer.');
+                error.statusCode = 400;
+                throw error;
+            }
+        }
+
+        if (action === 'unlock' && parsedPenaltyPoints > 0) {
+            const error = new Error('penaltyPoints is only supported when action is delete.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (action === 'unlock') {
+            await documentModel.updateDocumentStatus({
+                documentId,
+                status: 'approved',
+            });
+
+            const resolvedReports = await reportModel.resolveOpenDocumentReports({
+                documentId,
+                reviewedByUserId: req.user.userId,
+                status: 'dismissed',
+                reviewNote: note || 'Document is valid after moderation review.',
+            });
+
+            await documentModel.logDocumentModerationAction({
+                userId: req.user.userId,
+                action: 'resolve_report_unlock_document',
+                documentId,
+            });
+
+            try {
+                await notificationModel.createNotification({
+                    userId: document.ownerUserId,
+                    type: 'document_unlocked',
+                    title: 'Document restored',
+                    message: `Your document "${document.title}" passed moderation review and is available again.`,
+                    metadata: {
+                        documentId,
+                        action,
+                        note: note || null,
+                        resolvedReports,
+                    },
+                });
+            } catch (notifyError) {
+                console.error('Failed to create unlock-after-report notification:', notifyError.message);
+            }
+
+            const updatedDocument = await documentModel.getDocumentDetailById(documentId);
+
+            res.json({
+                success: true,
+                message: 'Reported document was unlocked successfully.',
+                data: {
+                    document: updatedDocument,
+                    moderation: {
+                        action,
+                        note: note || null,
+                        resolvedReports,
+                    },
+                },
+            });
+
+            return;
+        }
+
+        const resolvedReports = await reportModel.resolveOpenDocumentReports({
+            documentId,
+            reviewedByUserId: req.user.userId,
+            status: 'resolved',
+            reviewNote: note || 'Document violated policy and was deleted.',
+        });
+
+        let storageDeleteResult = null;
+
+        try {
+            storageDeleteResult = await deleteStoredDocumentFile(document.fileUrl);
+        } catch (storageError) {
+            const error = new Error(`Failed to delete stored file: ${storageError.message}`);
+            error.statusCode = 500;
+            throw error;
+        }
+
+        const deleteResult = await documentModel.deleteDocumentById({
+            documentId,
+            deletedByUserId: req.user.userId,
+            penaltyPoints: parsedPenaltyPoints,
+            penaltyNote: note || null,
+        });
+
+        try {
+            const pointMessage =
+                deleteResult.deductedPoints > 0
+                    ? ` ${deleteResult.deductedPoints} points were deducted from your account.`
+                    : '';
+
+            await notificationModel.createNotification({
+                userId: document.ownerUserId,
+                type: 'document_deleted',
+                title: 'Document deleted by moderation',
+                message: `Your document "${document.title}" was deleted after report review.${pointMessage}`,
+                metadata: {
+                    documentId,
+                    action,
+                    note: note || null,
+                    deductedPoints: deleteResult.deductedPoints,
+                    resolvedReports,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create delete-after-report notification:', notifyError.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Reported document was deleted successfully.',
+            data: {
+                documentId,
+                deletedStorage: storageDeleteResult,
+                moderation: {
+                    action,
+                    note: note || null,
+                    resolvedReports,
+                    deductedPoints: deleteResult.deductedPoints,
+                },
+            },
         });
     } catch (error) {
         next(error);
@@ -510,6 +815,7 @@ const unlockDocument = async (req, res, next) => {
 const deleteDocument = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
+        const { penaltyPoints, penaltyNote } = req.body || {};
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -525,35 +831,49 @@ const deleteDocument = async (req, res, next) => {
             throw error;
         }
 
-        let storageDeleteResult = null;
+        let parsedPenaltyPoints = 0;
+
+        if (penaltyPoints !== undefined && penaltyPoints !== null && penaltyPoints !== '') {
+            parsedPenaltyPoints = Number(penaltyPoints);
+
+            if (!Number.isInteger(parsedPenaltyPoints) || parsedPenaltyPoints < 0) {
+                const error = new Error('penaltyPoints must be a non-negative integer.');
+                error.statusCode = 400;
+                throw error;
+            }
+        }
 
         try {
-            if (isCloudinaryAssetUrl(document.fileUrl)) {
-                storageDeleteResult = await deleteCloudinaryRawByUrl(document.fileUrl);
-            } else {
-                storageDeleteResult = await deleteLocalUploadedFileByUrl(document.fileUrl);
-            }
+            await deleteStoredDocumentFile(document.fileUrl);
         } catch (storageError) {
             const error = new Error(`Failed to delete stored file: ${storageError.message}`);
             error.statusCode = 500;
             throw error;
         }
 
-        await documentModel.deleteDocumentById({
+        const deleteResult = await documentModel.deleteDocumentById({
             documentId,
             deletedByUserId: req.user.userId,
+            penaltyPoints: parsedPenaltyPoints,
+            penaltyNote: penaltyNote || null,
         });
 
         try {
+            const pointMessage =
+                deleteResult.deductedPoints > 0
+                    ? ` ${deleteResult.deductedPoints} points were deducted from your account.`
+                    : '';
+
             await notificationModel.createNotification({
                 userId: document.ownerUserId,
                 type: 'document_deleted',
                 title: 'Document deleted by moderator',
-                message: `Your document "${document.title}" was deleted by moderator/admin.`,
+                message: `Your document "${document.title}" was deleted by moderator/admin.${pointMessage}`,
                 metadata: {
                     documentId,
                     deletedByUserId: req.user.userId,
                     deletedByRole: req.user.role,
+                    deductedPoints: deleteResult.deductedPoints,
                 },
             });
         } catch (notifyError) {
@@ -565,7 +885,7 @@ const deleteDocument = async (req, res, next) => {
             message: 'Document deleted successfully.',
             data: {
                 documentId,
-                deletedStorage: storageDeleteResult,
+                deductedPoints: deleteResult.deductedPoints,
             },
         });
     } catch (error) {
@@ -582,6 +902,9 @@ module.exports = {
     getAllUploadedDocuments,
     getMyUploadedDocuments,
     getPendingDocuments,
+    createDocumentReport,
+    getPendingReportedDocuments,
+    resolveReportedDocument,
     reviewDocument,
     lockDocument,
     unlockDocument,

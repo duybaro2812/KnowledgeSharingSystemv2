@@ -20,6 +20,12 @@ router.get(
     roleMiddleware('admin', 'moderator'),
     documentController.getPendingDocuments
 );
+router.get(
+    '/reports/pending',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getPendingReportedDocuments
+);
 router.patch(
     '/:id/review',
     authMiddleware,
@@ -43,6 +49,13 @@ router.delete(
     authMiddleware,
     roleMiddleware('admin', 'moderator'),
     documentController.deleteDocument
+);
+router.post('/:id/report', authMiddleware, documentController.createDocumentReport);
+router.patch(
+    '/:id/report-resolution',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.resolveReportedDocument
 );
 router.get('/:id', documentController.getDocumentDetail);
 router.post(

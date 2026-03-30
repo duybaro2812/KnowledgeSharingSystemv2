@@ -246,21 +246,38 @@ const logDocumentModerationAction = async ({ userId, action, documentId }) => {
         `);
 };
 
-const deleteDocumentById = async ({ documentId, deletedByUserId }) => {
+const deleteDocumentById = async ({
+    documentId,
+    deletedByUserId,
+    penaltyPoints = 0,
+    penaltyNote = null,
+}) => {
     const pool = getPool();
 
-    await pool
+    const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
         .input('deletedByUserId', sql.Int, deletedByUserId)
+        .input('penaltyPoints', sql.Int, penaltyPoints)
+        .input('penaltyNote', sql.NVarChar(255), penaltyNote)
         .query(`
             BEGIN TRY
                 BEGIN TRANSACTION;
 
+                DECLARE @ownerUserId INT;
                 DECLARE @reviewIds TABLE (reviewId INT PRIMARY KEY);
                 DECLARE @questionIds TABLE (questionId INT PRIMARY KEY);
                 DECLARE @commentIds TABLE (commentId INT PRIMARY KEY);
                 DECLARE @answerIds TABLE (answerId INT PRIMARY KEY);
+
+                SELECT @ownerUserId = d.ownerUserId
+                FROM dbo.Documents d
+                WHERE d.documentId = @documentId;
+
+                IF @ownerUserId IS NULL
+                BEGIN
+                    THROW 56602, N'Document not found.', 1;
+                END;
 
                 INSERT INTO @reviewIds (reviewId)
                 SELECT reviewId
@@ -321,7 +338,53 @@ const deleteDocumentById = async ({ documentId, deletedByUserId }) => {
                 INSERT INTO dbo.UserActivityLogs (userId, action, targetType, targetId)
                 VALUES (@deletedByUserId, N'delete_document', N'document', @documentId);
 
+                DECLARE @deductedPoints INT = 0;
+
+                IF @penaltyPoints > 0
+                BEGIN
+                    SELECT @deductedPoints =
+                        CASE
+                            WHEN u.points >= @penaltyPoints THEN @penaltyPoints
+                            ELSE u.points
+                        END
+                    FROM dbo.Users u
+                    WHERE u.userId = @ownerUserId;
+
+                    IF @deductedPoints > 0
+                    BEGIN
+                        UPDATE dbo.Users
+                        SET
+                            points = points - @deductedPoints,
+                            updatedAt = SYSDATETIME()
+                        WHERE userId = @ownerUserId;
+
+                        INSERT INTO dbo.PointTransactions (
+                            userId,
+                            transactionType,
+                            points,
+                            description,
+                            documentId,
+                            answerId,
+                            reviewId
+                        )
+                        VALUES (
+                            @ownerUserId,
+                            N'penalty',
+                            -@deductedPoints,
+                            COALESCE(@penaltyNote, CONCAT(N'Penalty for violating document #', @documentId)),
+                            NULL,
+                            NULL,
+                            NULL
+                        );
+
+                        INSERT INTO dbo.UserActivityLogs (userId, action, targetType, targetId)
+                        VALUES (@deletedByUserId, N'deduct_points_on_delete', N'user', @ownerUserId);
+                    END;
+                END;
+
                 COMMIT TRANSACTION;
+
+                SELECT @deductedPoints AS deductedPoints;
             END TRY
             BEGIN CATCH
                 IF @@TRANCOUNT > 0
@@ -329,6 +392,10 @@ const deleteDocumentById = async ({ documentId, deletedByUserId }) => {
                 THROW;
             END CATCH;
         `);
+
+    return {
+        deductedPoints: result.recordset[0]?.deductedPoints || 0,
+    };
 };
 
 module.exports = {

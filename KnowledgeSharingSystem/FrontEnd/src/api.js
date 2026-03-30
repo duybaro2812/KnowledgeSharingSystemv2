@@ -18,11 +18,16 @@ export const apiRequest = async (path, { method = 'GET', token, body, isForm = f
   if (token) headers.Authorization = `Bearer ${token}`;
   if (!isForm && body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new Error(`Cannot connect API: ${url}`);
+  }
 
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json') ? await response.json() : await response.text();
