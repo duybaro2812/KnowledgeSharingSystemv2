@@ -529,9 +529,9 @@ function AppController() {
     toggleLike,
     toggleDislike,
     toggleSave,
-    onReportFromPreview: (documentId) => {
+    onReportFromPreview: async (documentId, reason) => {
       if (!Number.isInteger(Number(documentId)) || Number(documentId) <= 0) return;
-      submitDocumentReport(Number(documentId));
+      await submitDocumentReport(Number(documentId), reason);
     },
   };
 

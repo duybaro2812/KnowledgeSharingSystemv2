@@ -340,6 +340,23 @@ const createDocumentReport = async (req, res, next) => {
             throw error;
         }
 
+        try {
+            await notifyModerationTeam({
+                type: 'document_reported',
+                title: 'New document report',
+                message: `Document "${document.title}" received a new report and needs moderation review.`,
+                metadata: {
+                    documentId,
+                    reason: String(reason).trim(),
+                    uniqueReporterCount: reportResult.uniqueReporterCount,
+                    threshold: reportModel.REPORT_AUTO_LOCK_THRESHOLD,
+                    autoLocked: Boolean(reportResult.wasAutoLocked),
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to notify moderation team for new report:', notifyError.message);
+        }
+
         if (reportResult.wasAutoLocked) {
             try {
                 await notificationModel.createNotification({
@@ -354,21 +371,6 @@ const createDocumentReport = async (req, res, next) => {
                 });
             } catch (notifyError) {
                 console.error('Failed to create auto-lock notification for owner:', notifyError.message);
-            }
-
-            try {
-                await notifyModerationTeam({
-                    type: 'document_report_threshold',
-                    title: 'Document needs moderation review',
-                    message: `Document "${document.title}" exceeded report threshold and was auto-locked.`,
-                    metadata: {
-                        documentId,
-                        uniqueReporterCount: reportResult.uniqueReporterCount,
-                        threshold: reportModel.REPORT_AUTO_LOCK_THRESHOLD,
-                    },
-                });
-            } catch (notifyError) {
-                console.error('Failed to notify moderation team:', notifyError.message);
             }
         }
 

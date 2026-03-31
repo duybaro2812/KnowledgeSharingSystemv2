@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 function PreviewPanel(props) {
   const {
     previewDoc,
@@ -9,6 +11,9 @@ function PreviewPanel(props) {
     onReport,
   } = props;
 
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+
   if (!previewDoc) return null;
 
   const isLocked = !!previewDoc.isLockedForPoints;
@@ -16,6 +21,25 @@ function PreviewPanel(props) {
   const reaction = getDocReactionCounts
     ? getDocReactionCounts(docId)
     : { likeCount: 0, dislikeCount: 0, liked: false, disliked: false, saved: false };
+
+  const openReportModal = () => {
+    setReportReason("");
+    setIsReportOpen(true);
+  };
+
+  const closeReportModal = () => {
+    setIsReportOpen(false);
+    setReportReason("");
+  };
+
+  const handleSubmitReport = async () => {
+    const normalized = reportReason.trim();
+    if (!normalized) return;
+    if (onReport) {
+      await onReport(docId, normalized);
+    }
+    closeReportModal();
+  };
 
   return (
     <section className="panel preview-panel">
@@ -55,11 +79,7 @@ function PreviewPanel(props) {
           <button type="button" onClick={() => onToggleSave && onToggleSave(docId)}>
             {reaction.saved ? "Saved" : "Save"}
           </button>
-          <button
-            type="button"
-            className="danger-ghost"
-            onClick={() => onReport && onReport(docId)}
-          >
+          <button type="button" className="danger-ghost" onClick={openReportModal}>
             Report Document
           </button>
         </div>
@@ -87,20 +107,49 @@ function PreviewPanel(props) {
             </p>
             <div className="lock-overlay-actions">
               <button type="button">Earn points</button>
-              <button
-                type="button"
-                className="danger-ghost"
-                onClick={() => onReport && onReport(docId)}
-              >
+              <button type="button" className="danger-ghost" onClick={openReportModal}>
                 Report Document
               </button>
             </div>
           </div>
         )}
       </div>
+
+      {isReportOpen && (
+        <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="report-modal">
+            <div className="report-modal-head">
+              <h3>Report Document</h3>
+              <button type="button" className="report-close-btn" onClick={closeReportModal}>
+                ×
+              </button>
+            </div>
+            <p className="report-modal-sub">Please enter the reason for reporting this document.</p>
+            <textarea
+              className="report-textarea"
+              value={reportReason}
+              onChange={(e) => setReportReason(e.target.value)}
+              placeholder="Enter report reason..."
+              rows={4}
+            />
+            <div className="report-modal-actions">
+              <button type="button" onClick={closeReportModal}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={!reportReason.trim()}
+                onClick={handleSubmitReport}
+              >
+                Send report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
 
 export default PreviewPanel;
-

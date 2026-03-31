@@ -12,15 +12,18 @@ export function createReportFeature(ctx) {
     loadPendingDocuments,
   } = ctx;
 
-  const submitDocumentReport = async (documentId) => {
-    const reason = prompt("Nhập lý do report tài liệu:");
-    if (!reason || !reason.trim()) return;
+  const submitDocumentReport = async (documentId, reason) => {
+    const normalizedReason = typeof reason === "string" ? reason.trim() : "";
+
+    if (!normalizedReason) {
+      throw new Error("Report reason is required.");
+    }
 
     await call(async () => {
       const payload = await apiRequest(`/documents/${documentId}/report`, {
         method: "POST",
         token,
-        body: { reason: reason.trim() },
+        body: { reason: normalizedReason },
       });
       setStatus(payload.message || `Reported document #${documentId} successfully.`);
       await loadDocuments();
@@ -91,4 +94,3 @@ export function createReportFeature(ctx) {
     resolveReportedDocument,
   };
 }
-
