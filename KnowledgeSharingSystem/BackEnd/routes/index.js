@@ -3,6 +3,7 @@ const authRoutes = require('./auth.route');
 const categoryRoutes = require('./category.route');
 const documentRoutes = require('./document.route');
 const notificationRoutes = require('./notification.route');
+const pointRoutes = require('./point.route');
 const userRoutes = require('./user.route');
 
 const router = express.Router();
@@ -18,6 +19,7 @@ router.use('/auth', authRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/documents', documentRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/points', pointRoutes);
 router.use('/users', userRoutes);
 
 module.exports = router;

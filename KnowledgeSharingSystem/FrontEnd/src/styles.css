@@ -300,6 +300,11 @@ a {
   padding: 11px 14px;
 }
 
+.queue-btn {
+  font-size: 16px;
+  font-weight: 600;
+}
+
 .menu {
   display: grid;
   gap: 8px;
@@ -366,6 +371,34 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.app-shell.role-admin .sidebar {
+  background: #f6faff;
+  border-right-color: #c7d8f2;
+}
+
+.app-shell.role-moderator .sidebar {
+  background: #f9fbff;
+  border-right-color: #d2def3;
+}
+
+.role-topbar.role-admin {
+  border-color: #bfd4f3;
+  background: #f8fbff;
+}
+
+.role-topbar.role-admin h1 {
+  color: #133f8d;
+}
+
+.role-topbar.role-moderator {
+  border-color: #d2ddf0;
+  background: #fbfcff;
+}
+
+.role-topbar.role-moderator h1 {
+  color: #24497a;
 }
 
 .icon-btn {

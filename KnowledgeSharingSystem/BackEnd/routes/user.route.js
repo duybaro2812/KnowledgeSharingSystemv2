@@ -38,4 +38,11 @@ router.patch(
     userController.updateUserRole
 );
 
+router.delete(
+    '/:id',
+    authMiddleware,
+    roleMiddleware('admin'),
+    userController.deleteUserAccount
+);
+
 module.exports = router;

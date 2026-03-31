@@ -74,6 +74,7 @@ const createLoginHandler = (options = {}) => async (req, res, next) => {
                     username: user.username,
                     name: user.name,
                     email: user.email,
+                    points: user.points,
                     role: user.role,
                     isActive: user.isActive,
                     isVerified: user.isVerified,

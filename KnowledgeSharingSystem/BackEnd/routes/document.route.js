@@ -4,6 +4,7 @@ const roleMiddleware = require('../middlewares/role.middleware');
 const { documentUploadMiddleware } = require('../middlewares/upload.middleware');
 const documentController = require('../controllers/document.controller');
 const documentEngagementController = require('../controllers/document-engagement.controller');
+const documentAccessController = require('../controllers/document-access.controller');
 
 const router = express.Router();
 
@@ -61,6 +62,9 @@ router.patch(
 router.get('/:id/engagement', authMiddleware, documentEngagementController.getEngagement);
 router.patch('/:id/reaction', authMiddleware, documentEngagementController.updateReaction);
 router.patch('/:id/save', authMiddleware, documentEngagementController.updateSavedState);
+router.get('/:id/access', authMiddleware, documentAccessController.getDocumentAccessPolicy);
+router.post('/:id/view', authMiddleware, documentAccessController.registerFullView);
+router.post('/:id/download', authMiddleware, documentAccessController.registerDownload);
 router.get('/:id', documentController.getDocumentDetail);
 router.post(
     '/',

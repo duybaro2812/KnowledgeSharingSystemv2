@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { apiRequest } from "./api";
 import AuthShell from "./views/auth.view";
 import DashboardShell from "./views/dashboard.view";
 import {
@@ -11,10 +12,12 @@ import {
 import { createAuthFeature } from "./services/auth.service";
 import { createCategoryFeature } from "./services/category.service";
 import { createDataFeature } from "./services/data.service";
+import { createEngagementFeature } from "./services/engagement.service";
 import { createModerationFeature } from "./services/moderation.service";
 import { createNotificationFeature } from "./services/notification.service";
 import { createReportFeature } from "./services/report.service";
 import { createUploadFeature } from "./services/upload.service";
+import { createAdminUserFeature } from "./services/admin-user.service";
 import { getPasswordStrength, isStrongPassword } from "./models/password.model";
 import { createOpenPreview, resolveFileUrl } from "./models/preview.model";
 
@@ -58,13 +61,10 @@ function AppController() {
   const [reportedDocs, setReportedDocs] = useState([]);
   const [myDocs, setMyDocs] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
   const [duplicateByDocId, setDuplicateByDocId] = useState({});
   const [previewDoc, setPreviewDoc] = useState(null);
-  const [docInteractions, setDocInteractions] = useState({
-    liked: {},
-    disliked: {},
-    saved: {},
-  });
+  const [docEngagementById, setDocEngagementById] = useState({});
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [categoryDocs, setCategoryDocs] = useState([]);
 
@@ -98,7 +98,23 @@ function AppController() {
   const registerPasswordInvalid = hasRegisterPasswordInput && !isStrongPassword(registerForm.password);
   const forgotPasswordInvalid = hasForgotPasswordInput && !isStrongPassword(forgotNewPassword);
 
+  const resetWorkspaceState = () => {
+    setActiveTab("home");
+    setPreviewDoc(null);
+    setSelectedCategory(null);
+    setCategoryDocs([]);
+    setPendingDocs([]);
+    setReportedDocs([]);
+    setDuplicateByDocId({});
+    setNotifications([]);
+    setAdminUsers([]);
+    setDocEngagementById({});
+    setStatus("");
+    setError("");
+  };
+
   const setSession = (nextToken, nextUser) => {
+    resetWorkspaceState();
     setToken(nextToken);
     setUser(nextUser);
     localStorage.setItem("token", nextToken);
@@ -106,11 +122,21 @@ function AppController() {
   };
 
   const clearSession = () => {
+    resetWorkspaceState();
     setToken("");
     setUser(null);
-    setActiveTab("home");
     localStorage.removeItem("token");
     localStorage.removeItem("user");
+
+    try {
+      const current = new URL(window.location.href);
+      if (current.searchParams.has("docId")) {
+        current.searchParams.delete("docId");
+        window.history.replaceState({}, "", current.toString());
+      }
+    } catch {
+      // no-op
+    }
   };
 
   const clearFeedback = () => {
@@ -118,19 +144,15 @@ function AppController() {
     setStatus("");
   };
 
-  const interactionStorageKey = `neo_doc_interactions_${user?.userId || "guest"}`;
-
-  const parseStoredInteractions = (raw) => {
-    if (!raw) return { liked: {}, disliked: {}, saved: {} };
-    try {
-      const parsed = JSON.parse(raw);
-      return {
-        liked: parsed?.liked || {},
-        disliked: parsed?.disliked || {},
-        saved: parsed?.saved || {},
-      };
-    } catch {
-      return { liked: {}, disliked: {}, saved: {} };
+  const refreshCurrentUser = async () => {
+    if (!token) return;
+    const payload = await apiRequest("/auth/me", { token });
+    if (payload?.data) {
+      setUser((prev) => {
+        const merged = { ...(prev || {}), ...payload.data };
+        localStorage.setItem("user", JSON.stringify(merged));
+        return merged;
+      });
     }
   };
 
@@ -191,6 +213,14 @@ function AppController() {
     loadCategories,
   });
 
+  const { loadAdminUsers, changeUserRole, setUserActiveStatus, deleteUserAccount } =
+    createAdminUserFeature({
+    token,
+    call,
+    setStatus,
+    setAdminUsers,
+    });
+
   const { handleCreateCategory, handleCategoryClick } = createCategoryFeature({
     token,
     newCategoryForm,
@@ -229,6 +259,17 @@ function AppController() {
     token,
     call,
     loadNotifications,
+  });
+
+  const {
+    fetchDocumentEngagement,
+    updateDocumentReaction,
+    updateDocumentSavedState,
+  } = createEngagementFeature({
+    token,
+    call,
+    setStatus,
+    setDocEngagementById,
   });
 
   const {
@@ -273,8 +314,12 @@ function AppController() {
     call(async () => {
       const tasks = [loadCategories(), loadDocuments()];
       if (token) {
+        tasks.push(refreshCurrentUser());
         tasks.push(loadMyDocuments());
         tasks.push(loadNotifications());
+        if (user?.role === "admin") {
+          tasks.push(loadAdminUsers());
+        }
         if (hasModeratorRole(user?.role)) {
           tasks.push(loadPendingDocuments(token));
           tasks.push(loadReportedDocuments(token));
@@ -295,13 +340,11 @@ function AppController() {
   }, [activeTab, token, isModerator]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const stored = localStorage.getItem(interactionStorageKey);
-    setDocInteractions(parseStoredInteractions(stored));
-  }, [interactionStorageKey]);
-
-  useEffect(() => {
-    localStorage.setItem(interactionStorageKey, JSON.stringify(docInteractions));
-  }, [interactionStorageKey, docInteractions]);
+    if (activeTab !== "users" || !token || user?.role !== "admin") return;
+    call(async () => {
+      await loadAdminUsers();
+    });
+  }, [activeTab, token, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!queryDocId || !token) return;
@@ -315,6 +358,15 @@ function AppController() {
     openPreview(doc);
     setActiveTab("reader");
   }, [queryDocId, token, docs, myDocs, pendingDocs, reportedDocs, categoryDocs]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const targetDocId = Number(previewDoc?.documentId);
+    if (!token || !Number.isInteger(targetDocId) || targetDocId <= 0) return;
+
+    call(async () => {
+      await fetchDocumentEngagement(targetDocId);
+    });
+  }, [previewDoc?.documentId, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!["verify-otp", "forgot-verify"].includes(authMode) || resendCooldown <= 0) return;
@@ -348,61 +400,35 @@ function AppController() {
 
   const getDocReactionCounts = (documentId) => {
     const doc = findDocById(documentId) || {};
-    const baseLike = Number(doc.likeCount || 0);
-    const baseDislike = Number(doc.dislikeCount || 0);
-    const liked = Boolean(docInteractions.liked?.[documentId]);
-    const disliked = Boolean(docInteractions.disliked?.[documentId]);
+    const engagement = docEngagementById[documentId];
+    const likeCount = Number(engagement?.likeCount ?? doc.likeCount ?? 0);
+    const dislikeCount = Number(engagement?.dislikeCount ?? doc.dislikeCount ?? 0);
+    const currentReaction = engagement?.currentReaction ?? null;
+
     return {
-      likeCount: baseLike + (liked ? 1 : 0),
-      dislikeCount: baseDislike + (disliked ? 1 : 0),
-      liked,
-      disliked,
-      saved: Boolean(docInteractions.saved?.[documentId]),
+      likeCount,
+      dislikeCount,
+      liked: currentReaction === "like",
+      disliked: currentReaction === "dislike",
+      saved: Boolean(engagement?.isSaved),
     };
   };
 
-  const toggleLike = (documentId) => {
-    setDocInteractions((prev) => {
-      const nextLiked = { ...prev.liked };
-      const nextDisliked = { ...prev.disliked };
-      const alreadyLiked = Boolean(nextLiked[documentId]);
-      if (alreadyLiked) {
-        delete nextLiked[documentId];
-      } else {
-        nextLiked[documentId] = true;
-        delete nextDisliked[documentId];
-      }
-      return { ...prev, liked: nextLiked, disliked: nextDisliked };
-    });
+  const toggleLike = async (documentId) => {
+    const currentReaction = docEngagementById[documentId]?.currentReaction ?? null;
+    const nextReaction = currentReaction === "like" ? null : "like";
+    await updateDocumentReaction(documentId, nextReaction);
   };
 
-  const toggleDislike = (documentId) => {
-    setDocInteractions((prev) => {
-      const nextLiked = { ...prev.liked };
-      const nextDisliked = { ...prev.disliked };
-      const alreadyDisliked = Boolean(nextDisliked[documentId]);
-      if (alreadyDisliked) {
-        delete nextDisliked[documentId];
-      } else {
-        nextDisliked[documentId] = true;
-        delete nextLiked[documentId];
-      }
-      return { ...prev, liked: nextLiked, disliked: nextDisliked };
-    });
+  const toggleDislike = async (documentId) => {
+    const currentReaction = docEngagementById[documentId]?.currentReaction ?? null;
+    const nextReaction = currentReaction === "dislike" ? null : "dislike";
+    await updateDocumentReaction(documentId, nextReaction);
   };
 
-  const toggleSave = (documentId) => {
-    setDocInteractions((prev) => {
-      const nextSaved = { ...prev.saved };
-      if (nextSaved[documentId]) {
-        delete nextSaved[documentId];
-        setStatus(`Removed document #${documentId} from saved list.`);
-      } else {
-        nextSaved[documentId] = true;
-        setStatus(`Saved document #${documentId}.`);
-      }
-      return { ...prev, saved: nextSaved };
-    });
+  const toggleSave = async (documentId) => {
+    const isSaved = Boolean(docEngagementById[documentId]?.isSaved);
+    await updateDocumentSavedState(documentId, !isSaved);
   };
 
   const topicSuggestions = categories.filter((c) => {
@@ -506,6 +532,10 @@ function AppController() {
     lockUnlockDelete,
     duplicateByDocId,
     notifications,
+    adminUsers,
+    changeUserRole,
+    setUserActiveStatus,
+    deleteUserAccount,
     markRead,
     handleCreateCategory,
     newCategoryForm,

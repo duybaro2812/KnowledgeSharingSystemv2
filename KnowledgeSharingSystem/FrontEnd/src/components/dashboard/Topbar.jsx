@@ -4,6 +4,21 @@ function Topbar(props) {
   const { docFilter, setDocFilter, call, loadDocuments, setActiveTab, user, clearSession } = props;
   const [openUserMenu, setOpenUserMenu] = useState(false);
   const userMenuRef = useRef(null);
+  const role = user?.role || "user";
+  const isAdmin = role === "admin";
+  const isModerator = role === "moderator";
+
+  const title = isAdmin
+    ? "Admin Workspace"
+    : isModerator
+    ? "Moderator Workspace"
+    : "Knowledge Sharing Workspace";
+
+  const subtitle = isAdmin
+    ? "Manage reports, moderation queue, and platform-level actions."
+    : isModerator
+    ? "Review reports, lock/unlock documents, and handle moderation workflow."
+    : "API endpoint ready: local backend is connected.";
 
   useEffect(() => {
     const onDocClick = (e) => {
@@ -17,10 +32,10 @@ function Topbar(props) {
   }, []);
 
   return (
-    <header className="topbar studocu-topbar">
+    <header className={`topbar studocu-topbar role-topbar role-${role}`}>
       <div className="topbar-left">
-        <h1>Knowledge Sharing Workspace</h1>
-        <p>API endpoint ready: local backend is connected.</p>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
       </div>
 
       <div className="topbar-center">
@@ -64,15 +79,61 @@ function Topbar(props) {
 
           {openUserMenu && (
             <div className="user-menu-dropdown">
-              <button type="button" onClick={() => { setActiveTab("profile"); setOpenUserMenu(false); }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("profile");
+                  setOpenUserMenu(false);
+                }}
+              >
                 Profile
               </button>
-              <button type="button" onClick={() => { setActiveTab("library"); setOpenUserMenu(false); }}>
-                Uploads
-              </button>
-              <button type="button" onClick={() => { setActiveTab("settings"); setOpenUserMenu(false); }}>
+
+              {role === "user" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab("library");
+                    setOpenUserMenu(false);
+                  }}
+                >
+                  Uploads
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("moderation");
+                      setOpenUserMenu(false);
+                    }}
+                  >
+                    Moderation
+                  </button>
+                  {role === "admin" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab("users");
+                        setOpenUserMenu(false);
+                      }}
+                    >
+                      Users
+                    </button>
+                  )}
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("settings");
+                  setOpenUserMenu(false);
+                }}
+              >
                 Settings
               </button>
+
               <button type="button" className="danger-item" onClick={clearSession}>
                 Sign out
               </button>

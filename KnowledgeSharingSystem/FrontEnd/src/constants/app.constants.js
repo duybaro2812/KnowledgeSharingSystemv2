@@ -14,13 +14,14 @@ export const hasModeratorRole = (role) =>
 export const roleTabs = {
   user: ["home", "upload", "notifications", "categories"],
   moderator: ["home", "upload", "moderation", "categories"],
-  admin: ["home", "upload", "moderation", "categories"],
+  admin: ["home", "upload", "moderation", "users", "categories"],
 };
 
 export const tabLabel = {
   home: "Home",
   upload: "Upload",
   moderation: "Moderation",
+  users: "Users",
   notifications: "Notifications",
   categories: "Categories",
 };

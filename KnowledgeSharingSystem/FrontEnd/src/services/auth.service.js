@@ -46,7 +46,7 @@ export function createAuthFeature(ctx) {
       setActiveTab("home");
       setStatus("Login successful.");
       await loadMyDocuments();
-      if (!hasModeratorRole(nextUser?.role)) await loadNotifications();
+      await loadNotifications();
       if (hasModeratorRole(nextUser?.role)) await loadPendingDocuments(nextToken);
     });
   };

@@ -1,8 +1,25 @@
 function Sidebar(props) {
   const { user, stats, activeTab, setActiveTab, clearSession } = props;
+  const role = user?.role || "user";
+  const isUserRole = role === "user";
+  const isAdminRole = role === "admin";
+
+  const menuItems = isUserRole
+    ? [
+        { key: "home", label: "Home" },
+        { key: "library", label: "My library" },
+        { key: "home", label: "Recent" },
+      ]
+    : [
+        { key: "moderation", label: isAdminRole ? "Admin queue" : "Moderation queue" },
+        ...(isAdminRole ? [{ key: "users", label: "Users" }] : []),
+        { key: "notifications", label: "Notifications" },
+        { key: "categories", label: "Categories" },
+        { key: "home", label: "Home" },
+      ];
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar role-sidebar role-${role}`}>
       <div className="brand">NeoShare</div>
       <button
         type="button"
@@ -30,29 +47,29 @@ function Sidebar(props) {
         </div>
       </div>
 
-      <button
-        className="primary-btn sidebar-new-btn"
-        onClick={() => setActiveTab("upload")}
-      >
-        + New
-      </button>
+      {isUserRole ? (
+        <button className="primary-btn sidebar-new-btn" onClick={() => setActiveTab("upload")}>
+          + New
+        </button>
+      ) : (
+        <button
+          className="primary-btn sidebar-new-btn queue-btn"
+          onClick={() => setActiveTab("moderation")}
+        >
+          {isAdminRole ? "Open admin queue" : "Open moderation queue"}
+        </button>
+      )}
 
       <div className="menu">
-        <button
-          className={`menu-item ${activeTab === "home" ? "active" : ""}`}
-          onClick={() => setActiveTab("home")}
-        >
-          Home
-        </button>
-        <button
-          className={`menu-item ${activeTab === "library" ? "active" : ""}`}
-          onClick={() => setActiveTab("library")}
-        >
-          My library
-        </button>
-        <button className="menu-item" onClick={() => setActiveTab("home")}>
-          Recent
-        </button>
+        {menuItems.map((item, index) => (
+          <button
+            key={`${item.key}-${index}`}
+            className={`menu-item ${activeTab === item.key ? "active" : ""}`}
+            onClick={() => setActiveTab(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
 
       <button className="ghost-btn" onClick={clearSession}>

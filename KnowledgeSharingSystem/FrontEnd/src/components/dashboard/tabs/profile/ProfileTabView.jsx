@@ -12,6 +12,7 @@ function ProfileTabView(props) {
           <p><b>Username:</b> {user?.username || "-"}</p>
           <p><b>Email:</b> {user?.email || "-"}</p>
           <p><b>Role:</b> {user?.role || "-"}</p>
+          <p><b>Points:</b> {Number(user?.points || 0)}</p>
         </div>
       </div>
       <div className="stats profile-page-stats">

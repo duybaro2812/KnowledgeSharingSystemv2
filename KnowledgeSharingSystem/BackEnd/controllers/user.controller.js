@@ -174,10 +174,47 @@ const changeMyPassword = async (req, res, next) => {
     }
 };
 
+const deleteUserAccount = async (req, res, next) => {
+    try {
+        const userId = Number(req.params.id);
+
+        if (!Number.isInteger(userId) || userId <= 0) {
+            const error = new Error('A valid user id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (Number(req.user?.userId) === userId) {
+            const error = new Error('Admin cannot delete their own account.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const affectedRows = await userModel.softDeleteUserByAdmin({ userId });
+
+        if (!affectedRows) {
+            const error = new Error('User not found or admin account cannot be deleted.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const updatedProfile = await userModel.getUserProfileById(userId);
+
+        res.json({
+            success: true,
+            message: 'User account has been deleted (soft delete) successfully.',
+            data: updatedProfile,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getUsers,
     setUserActiveStatus,
     updateUserRole,
     updateMyProfile,
     changeMyPassword,
+    deleteUserAccount,
 };

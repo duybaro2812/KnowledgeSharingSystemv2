@@ -35,7 +35,7 @@ export function createDataFeature(ctx) {
   };
 
   const loadNotifications = async () => {
-    if (!token || isModerator) {
+    if (!token) {
       setNotifications([]);
       return;
     }

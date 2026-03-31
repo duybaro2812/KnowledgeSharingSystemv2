@@ -9,9 +9,11 @@ import NotificationsTab from "./dashboard/tabs/NotificationsTab";
 import ProfileTab from "./dashboard/tabs/ProfileTab";
 import SettingsTab from "./dashboard/tabs/SettingsTab";
 import UploadTab from "./dashboard/tabs/UploadTab";
+import UsersTab from "./dashboard/tabs/UsersTab";
 
 function DashboardShell(props) {
   const {
+    user,
     activeTab,
     status,
     error,
@@ -23,9 +25,10 @@ function DashboardShell(props) {
     toggleSave,
     onReportFromPreview,
   } = props;
+  const roleClass = `role-${user?.role || "user"}`;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${roleClass}`}>
       <Sidebar {...props} />
 
       <main className="content">
@@ -40,21 +43,10 @@ function DashboardShell(props) {
         {activeTab === "settings" && <SettingsTab {...props} />}
         {activeTab === "upload" && <UploadTab {...props} />}
         {activeTab === "moderation" && <ModerationTab {...props} />}
+        {activeTab === "users" && <UsersTab {...props} />}
         {activeTab === "notifications" && <NotificationsTab {...props} />}
         {activeTab === "categories" && <CategoriesTab {...props} />}
-        {activeTab === "reader" && (
-          <PreviewPanel
-            previewDoc={previewDoc}
-            onClose={closePreview}
-            getDocReactionCounts={getDocReactionCounts}
-            onToggleLike={toggleLike}
-            onToggleDislike={toggleDislike}
-            onToggleSave={toggleSave}
-            onReport={onReportFromPreview}
-          />
-        )}
-
-        {activeTab !== "reader" && (
+        {(activeTab === "reader" || previewDoc) && (
           <PreviewPanel
             previewDoc={previewDoc}
             onClose={closePreview}

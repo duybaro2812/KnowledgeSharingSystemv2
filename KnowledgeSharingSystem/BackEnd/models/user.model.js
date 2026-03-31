@@ -27,6 +27,7 @@ const findUserByUsername = async (username) => {
                 username,
                 name,
                 email,
+                points,
                 passwordHash,
                 role,
                 isActive,
@@ -52,6 +53,7 @@ const findUserByEmail = async (email) => {
                 username,
                 name,
                 email,
+                points,
                 passwordHash,
                 role,
                 isActive,
@@ -71,7 +73,21 @@ const getUserProfileById = async (userId) => {
     const result = await pool
         .request()
         .input('userId', sql.Int, userId)
-        .execute('dbo.usp_GetUserProfile');
+        .query(`
+            SELECT
+                userId,
+                username,
+                name,
+                email,
+                points,
+                role,
+                isActive,
+                isVerified,
+                createdAt,
+                updatedAt
+            FROM dbo.Users
+            WHERE userId = @userId;
+        `);
 
     return result.recordset[0] || null;
 };
@@ -95,6 +111,7 @@ const getUsers = async () => {
             username,
             name,
             email,
+            points,
             role,
             isActive,
             isVerified,
@@ -216,6 +233,31 @@ const setUserVerified = async (userId) => {
         `);
 };
 
+const softDeleteUserByAdmin = async ({ userId }) => {
+    const pool = getPool();
+
+    const result = await pool
+        .request()
+        .input('userId', sql.Int, userId)
+        .query(`
+            UPDATE dbo.Users
+            SET
+                isActive = 0,
+                isVerified = 0,
+                role = N'user',
+                name = CONCAT(N'Deleted User #', userId),
+                username = CONCAT(N'deleted_user_', userId),
+                email = CONCAT(N'deleted_', userId, N'@deleted.local'),
+                updatedAt = SYSDATETIME()
+            WHERE userId = @userId
+              AND role <> N'admin';
+
+            SELECT @@ROWCOUNT AS affectedRows;
+        `);
+
+    return result.recordset[0]?.affectedRows || 0;
+};
+
 module.exports = {
     registerUser,
     findUserByUsername,
@@ -229,4 +271,5 @@ module.exports = {
     getUserAuthById,
     updatePassword,
     setUserVerified,
+    softDeleteUserByAdmin,
 };

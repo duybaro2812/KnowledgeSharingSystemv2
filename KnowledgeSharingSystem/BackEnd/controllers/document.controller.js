@@ -3,6 +3,7 @@ const documentModel = require('../models/document.model');
 const reportModel = require('../models/report.model');
 const notificationModel = require('../models/notification.model');
 const userModel = require('../models/user.model');
+const pointEventModel = require('../models/point-event.model');
 const {
     uploadDocumentBuffer,
     isCloudinaryAssetUrl,
@@ -128,6 +129,21 @@ const createDocument = async (req, res, next) => {
         });
 
         const document = await documentModel.getDocumentDetailById(documentId);
+
+        try {
+            await pointEventModel.createPointEvent({
+                userId: req.user.userId,
+                eventType: pointEventModel.EVENT_TYPES.UPLOAD_SUBMITTED,
+                points: 10,
+                documentId,
+                metadata: {
+                    source: 'document_upload',
+                    title,
+                },
+            });
+        } catch (pointEventError) {
+            console.error('Failed to create upload_submitted point event:', pointEventError.message);
+        }
 
         res.status(201).json({
             success: true,
@@ -640,6 +656,21 @@ const reviewDocument = async (req, res, next) => {
                 message: 'Your document was rejected because it is invalid.',
             };
         } else {
+            try {
+                await pointEventModel.createPointEvent({
+                    userId: updatedDocument.ownerUserId,
+                    eventType: pointEventModel.EVENT_TYPES.UPLOAD_APPROVED,
+                    points: 30,
+                    documentId,
+                    metadata: {
+                        source: 'document_review',
+                        moderatorUserId: req.user.userId,
+                    },
+                });
+            } catch (pointEventError) {
+                console.error('Failed to create upload_approved point event:', pointEventError.message);
+            }
+
             try {
                 await notificationModel.createNotification({
                     userId: updatedDocument.ownerUserId,
