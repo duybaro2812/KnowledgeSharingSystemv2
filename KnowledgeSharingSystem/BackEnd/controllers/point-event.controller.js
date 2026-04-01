@@ -18,7 +18,7 @@ const getPendingPointEvents = async (req, res, next) => {
 const reviewPointEvent = async (req, res, next) => {
     try {
         const eventId = Number(req.params.eventId);
-        const { decision, note } = req.body;
+        const { decision, note, pointDelta } = req.body;
 
         if (!Number.isInteger(eventId) || eventId <= 0) {
             const error = new Error('A valid point event id is required.');
@@ -32,11 +32,22 @@ const reviewPointEvent = async (req, res, next) => {
             throw error;
         }
 
+        let parsedPointDelta = null;
+        if (typeof pointDelta !== 'undefined' && pointDelta !== null && pointDelta !== '') {
+            parsedPointDelta = Number(pointDelta);
+            if (!Number.isInteger(parsedPointDelta)) {
+                const error = new Error('pointDelta must be an integer.');
+                error.statusCode = 400;
+                throw error;
+            }
+        }
+
         const reviewed = await pointEventModel.reviewPointEvent({
             eventId,
             reviewedByUserId: req.user.userId,
             decision,
             reviewNote: note || null,
+            pointDeltaOverride: decision === 'approved' ? parsedPointDelta : null,
         });
 
         try {
@@ -49,12 +60,13 @@ const reviewPointEvent = async (req, res, next) => {
                         : 'Point event rejected',
                 message:
                     decision === 'approved'
-                        ? `You received +${reviewed.points} points for ${reviewed.eventType}.`
+                        ? `Your point event (${reviewed.eventType}) was approved with ${reviewed.approvedPoints} point(s).`
                         : `Your point event (${reviewed.eventType}) was rejected.`,
                 metadata: {
                     eventId: reviewed.eventId,
                     eventType: reviewed.eventType,
                     points: reviewed.points,
+                    approvedPoints: reviewed.approvedPoints,
                     decision,
                     note: note || null,
                     userPointsAfter: reviewed.userPointsAfter,

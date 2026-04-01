@@ -3,6 +3,7 @@ const { getPool, sql } = require('../utils/db');
 const EVENT_TYPES = {
     UPLOAD_SUBMITTED: 'upload_submitted',
     UPLOAD_APPROVED: 'upload_approved',
+    QA_SESSION_RATED: 'qa_session_rated',
 };
 
 const EVENT_TO_TRANSACTION_TYPE = {
@@ -13,6 +14,7 @@ const EVENT_TO_TRANSACTION_TYPE = {
     upvote_received: 'moderation_reward',
     document_viewed: 'moderation_reward',
     document_saved_by_other: 'moderation_reward',
+    qa_session_rated: 'moderation_reward',
 };
 
 const createPointEvent = async ({
@@ -20,6 +22,7 @@ const createPointEvent = async ({
     eventType,
     points,
     documentId = null,
+    qaSessionId = null,
     metadata = null,
 }) => {
     const pool = getPool();
@@ -30,6 +33,7 @@ const createPointEvent = async ({
         .input('eventType', sql.NVarChar(50), eventType)
         .input('points', sql.Int, points)
         .input('documentId', sql.Int, documentId)
+        .input('qaSessionId', sql.Int, qaSessionId)
         .input('metadata', sql.NVarChar(sql.MAX), metadata ? JSON.stringify(metadata) : null)
         .query(`
             IF @eventType IN (N'upload_submitted', N'upload_approved')
@@ -51,8 +55,27 @@ const createPointEvent = async ({
                 RETURN;
             END;
 
-            INSERT INTO dbo.PointEvents (userId, eventType, points, status, documentId, metadata)
-            VALUES (@userId, @eventType, @points, N'pending', @documentId, @metadata);
+            IF @eventType = N'qa_session_rated'
+               AND @qaSessionId IS NOT NULL
+               AND EXISTS (
+                    SELECT 1
+                    FROM dbo.PointEvents pe
+                    WHERE pe.userId = @userId
+                      AND pe.qaSessionId = @qaSessionId
+                      AND pe.eventType = @eventType
+               )
+            BEGIN
+                SELECT TOP 1 eventId, status
+                FROM dbo.PointEvents
+                WHERE userId = @userId
+                  AND qaSessionId = @qaSessionId
+                  AND eventType = @eventType
+                ORDER BY eventId DESC;
+                RETURN;
+            END;
+
+            INSERT INTO dbo.PointEvents (userId, eventType, points, status, documentId, qaSessionId, metadata)
+            VALUES (@userId, @eventType, @points, N'pending', @documentId, @qaSessionId, @metadata);
 
             SELECT CAST(SCOPE_IDENTITY() AS INT) AS eventId, N'pending' AS status;
         `);
@@ -74,6 +97,7 @@ const getPendingPointEvents = async () => {
             pe.points,
             pe.status,
             pe.documentId,
+            pe.qaSessionId,
             d.title AS documentTitle,
             pe.metadata,
             pe.createdAt
@@ -92,6 +116,7 @@ const reviewPointEvent = async ({
     reviewedByUserId,
     decision,
     reviewNote = null,
+    pointDeltaOverride = null,
 }) => {
     const pool = getPool();
     const transaction = new sql.Transaction(pool);
@@ -109,7 +134,8 @@ const reviewPointEvent = async ({
                 pe.eventType,
                 pe.points,
                 pe.status,
-                pe.documentId
+                pe.documentId,
+                pe.qaSessionId
             FROM dbo.PointEvents pe WITH (UPDLOCK, ROWLOCK)
             WHERE pe.eventId = @eventId;
         `);
@@ -145,56 +171,71 @@ const reviewPointEvent = async ({
         `);
 
         let userPointsAfter = null;
+        let approvedPoints = null;
 
         if (decision === 'approved') {
             const transactionType = EVENT_TO_TRANSACTION_TYPE[pointEvent.eventType] || 'admin_adjustment';
-            const pointDelta = Number(pointEvent.points || 0);
+            const pointDelta = Number.isInteger(pointDeltaOverride)
+                ? pointDeltaOverride
+                : Number(pointEvent.points || 0);
+            approvedPoints = pointDelta;
             const description = `Point reward approved for event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`;
 
-            const rewardRequest = new sql.Request(transaction);
-            rewardRequest.input('userId', sql.Int, pointEvent.userId);
-            rewardRequest.input('pointDelta', sql.Int, pointDelta);
-            rewardRequest.input('transactionType', sql.NVarChar(50), transactionType);
-            rewardRequest.input('description', sql.NVarChar(255), description);
-            rewardRequest.input('documentId', sql.Int, pointEvent.documentId);
+            if (pointDelta !== 0) {
+                const rewardRequest = new sql.Request(transaction);
+                rewardRequest.input('userId', sql.Int, pointEvent.userId);
+                rewardRequest.input('pointDelta', sql.Int, pointDelta);
+                rewardRequest.input('transactionType', sql.NVarChar(50), transactionType);
+                rewardRequest.input('description', sql.NVarChar(255), description);
+                rewardRequest.input('documentId', sql.Int, pointEvent.documentId);
 
-            const rewardResult = await rewardRequest.query(`
-                UPDATE dbo.Users
-                SET
-                    points = points + @pointDelta,
-                    updatedAt = SYSDATETIME()
-                WHERE userId = @userId;
+                const rewardResult = await rewardRequest.query(`
+                    UPDATE dbo.Users
+                    SET
+                        points = points + @pointDelta,
+                        updatedAt = SYSDATETIME()
+                    WHERE userId = @userId;
 
-                IF @@ROWCOUNT = 0
-                BEGIN
-                    THROW 56911, N'User for point event not found.', 1;
-                END;
+                    IF @@ROWCOUNT = 0
+                    BEGIN
+                        THROW 56911, N'User for point event not found.', 1;
+                    END;
 
-                INSERT INTO dbo.PointTransactions (
-                    userId,
-                    transactionType,
-                    points,
-                    description,
-                    documentId,
-                    answerId,
-                    reviewId
-                )
-                VALUES (
-                    @userId,
-                    @transactionType,
-                    @pointDelta,
-                    @description,
-                    @documentId,
-                    NULL,
-                    NULL
-                );
+                    INSERT INTO dbo.PointTransactions (
+                        userId,
+                        transactionType,
+                        points,
+                        description,
+                        documentId,
+                        answerId,
+                        reviewId
+                    )
+                    VALUES (
+                        @userId,
+                        @transactionType,
+                        @pointDelta,
+                        @description,
+                        @documentId,
+                        NULL,
+                        NULL
+                    );
 
-                SELECT points AS userPointsAfter
-                FROM dbo.Users
-                WHERE userId = @userId;
-            `);
+                    SELECT points AS userPointsAfter
+                    FROM dbo.Users
+                    WHERE userId = @userId;
+                `);
 
-            userPointsAfter = rewardResult.recordset[0]?.userPointsAfter ?? null;
+                userPointsAfter = rewardResult.recordset[0]?.userPointsAfter ?? null;
+            } else {
+                const balanceRequest = new sql.Request(transaction);
+                balanceRequest.input('userId', sql.Int, pointEvent.userId);
+                const balanceResult = await balanceRequest.query(`
+                    SELECT points AS userPointsAfter
+                    FROM dbo.Users
+                    WHERE userId = @userId;
+                `);
+                userPointsAfter = balanceResult.recordset[0]?.userPointsAfter ?? null;
+            }
         }
 
         await transaction.commit();
@@ -204,6 +245,7 @@ const reviewPointEvent = async ({
             status: decision,
             reviewedByUserId,
             reviewNote,
+            approvedPoints,
             userPointsAfter,
         };
     } catch (error) {
