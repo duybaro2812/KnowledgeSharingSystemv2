@@ -182,6 +182,29 @@ const reviewPointEvent = async ({
             const description = `Point reward approved for event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`;
 
             if (pointDelta !== 0) {
+                const pointCheckRequest = new sql.Request(transaction);
+                pointCheckRequest.input('userId', sql.Int, pointEvent.userId);
+                const pointCheckResult = await pointCheckRequest.query(`
+                    SELECT points
+                    FROM dbo.Users
+                    WHERE userId = @userId;
+                `);
+
+                const currentPoints = pointCheckResult.recordset[0]?.points;
+                if (typeof currentPoints !== 'number') {
+                    const error = new Error('User for point event not found.');
+                    error.statusCode = 404;
+                    throw error;
+                }
+
+                if (currentPoints + pointDelta < 0) {
+                    const error = new Error(
+                        `Insufficient points for deduction. Current points: ${currentPoints}, requested delta: ${pointDelta}.`
+                    );
+                    error.statusCode = 400;
+                    throw error;
+                }
+
                 const rewardRequest = new sql.Request(transaction);
                 rewardRequest.input('userId', sql.Int, pointEvent.userId);
                 rewardRequest.input('pointDelta', sql.Int, pointDelta);
@@ -190,16 +213,20 @@ const reviewPointEvent = async ({
                 rewardRequest.input('documentId', sql.Int, pointEvent.documentId);
 
                 const rewardResult = await rewardRequest.query(`
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM dbo.Users
+                        WHERE userId = @userId
+                    )
+                    BEGIN
+                        THROW 56911, N'User for point event not found.', 1;
+                    END;
+
                     UPDATE dbo.Users
                     SET
                         points = points + @pointDelta,
                         updatedAt = SYSDATETIME()
                     WHERE userId = @userId;
-
-                    IF @@ROWCOUNT = 0
-                    BEGIN
-                        THROW 56911, N'User for point event not found.', 1;
-                    END;
 
                     INSERT INTO dbo.PointTransactions (
                         userId,

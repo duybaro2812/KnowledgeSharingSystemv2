@@ -119,6 +119,42 @@ function ModerationTabView(props) {
               ))}
             </div>
           )}
+
+          <div className="moderation-subhead">
+            <h3>Pending point events</h3>
+            <p>Approve/reject point rewards and deductions created by system events.</p>
+          </div>
+
+          {model.pendingPointEvents.length === 0 ? (
+            <p className="subtle-text">No pending point events.</p>
+          ) : (
+            <div className="moderation-list">
+              {model.pendingPointEvents.map((event) => (
+                <article key={`point-event-${event.eventId}`} className="moderation-item">
+                  <h3>
+                    Event #{event.eventId} - {event.eventType}
+                  </h3>
+                  <p>
+                    User: #{event.userId} {event.userName ? `- ${event.userName}` : ""}
+                  </p>
+                  <p>
+                    Suggested points: <b>{event.points}</b>
+                  </p>
+                  <p>Status: {event.status}</p>
+                  {event.documentId && <p>Document: #{event.documentId}</p>}
+                  {event.qaSessionId && <p>Q&A session: #{event.qaSessionId}</p>}
+                  <div className="action-row">
+                    <button onClick={() => controller.onApprovePointEvent(event.eventId)}>
+                      Approve points
+                    </button>
+                    <button className="danger" onClick={() => controller.onRejectPointEvent(event.eventId)}>
+                      Reject
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </>
       )}
     </section>

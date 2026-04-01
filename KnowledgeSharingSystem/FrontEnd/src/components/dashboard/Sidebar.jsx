@@ -8,9 +8,11 @@ function Sidebar(props) {
     ? [
         { key: "home", label: "Home" },
         { key: "library", label: "My library" },
+        { key: "points", label: "Points" },
         { key: "home", label: "Recent" },
       ]
     : [
+        { key: "points", label: "Points" },
         { key: "moderation", label: isAdminRole ? "Admin queue" : "Moderation queue" },
         ...(isAdminRole ? [{ key: "users", label: "Users" }] : []),
         { key: "notifications", label: "Notifications" },
@@ -42,8 +44,8 @@ function Sidebar(props) {
           <span>Uploads</span>
         </div>
         <div>
-          <b>{stats.upvotes}</b>
-          <span>Upvotes</span>
+          <b>{stats.points}</b>
+          <span>Points</span>
         </div>
       </div>
 

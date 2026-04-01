@@ -6,6 +6,7 @@ import HomeTab from "./dashboard/tabs/HomeTab";
 import ModerationTab from "./dashboard/tabs/ModerationTab";
 import MyLibraryTab from "./dashboard/tabs/MyLibraryTab";
 import NotificationsTab from "./dashboard/tabs/NotificationsTab";
+import PointsTab from "./dashboard/tabs/PointsTab";
 import ProfileTab from "./dashboard/tabs/ProfileTab";
 import SettingsTab from "./dashboard/tabs/SettingsTab";
 import UploadTab from "./dashboard/tabs/UploadTab";
@@ -45,6 +46,7 @@ function DashboardShell(props) {
         {activeTab === "moderation" && <ModerationTab {...props} />}
         {activeTab === "users" && <UsersTab {...props} />}
         {activeTab === "notifications" && <NotificationsTab {...props} />}
+        {activeTab === "points" && <PointsTab {...props} />}
         {activeTab === "categories" && <CategoriesTab {...props} />}
         {(activeTab === "reader" || previewDoc) && (
           <PreviewPanel

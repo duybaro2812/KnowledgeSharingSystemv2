@@ -25,8 +25,8 @@ function ProfileTabView(props) {
           <span>Uploads</span>
         </div>
         <div>
-          <b>{model.stats.upvotes}</b>
-          <span>Upvotes</span>
+          <b>{model.stats.points}</b>
+          <span>Points</span>
         </div>
       </div>
     </section>

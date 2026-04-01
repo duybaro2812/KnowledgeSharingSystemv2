@@ -89,6 +89,16 @@ function Topbar(props) {
                 Profile
               </button>
 
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("points");
+                  setOpenUserMenu(false);
+                }}
+              >
+                Points
+              </button>
+
               {role === "user" ? (
                 <button
                   type="button"

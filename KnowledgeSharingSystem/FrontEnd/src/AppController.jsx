@@ -15,6 +15,8 @@ import { createDataFeature } from "./services/data.service";
 import { createEngagementFeature } from "./services/engagement.service";
 import { createModerationFeature } from "./services/moderation.service";
 import { createNotificationFeature } from "./services/notification.service";
+import { createPointEventFeature } from "./services/point-event.service";
+import { createPointsFeature } from "./services/points.service";
 import { createReportFeature } from "./services/report.service";
 import { createUploadFeature } from "./services/upload.service";
 import { createAdminUserFeature } from "./services/admin-user.service";
@@ -59,7 +61,12 @@ function AppController() {
   const [docs, setDocs] = useState([]);
   const [pendingDocs, setPendingDocs] = useState([]);
   const [reportedDocs, setReportedDocs] = useState([]);
+  const [pendingPointEvents, setPendingPointEvents] = useState([]);
   const [myDocs, setMyDocs] = useState([]);
+  const [pointSummary, setPointSummary] = useState(null);
+  const [pointTransactions, setPointTransactions] = useState([]);
+  const [myPointEvents, setMyPointEvents] = useState([]);
+  const [pointPolicy, setPointPolicy] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [adminUsers, setAdminUsers] = useState([]);
   const [duplicateByDocId, setDuplicateByDocId] = useState({});
@@ -105,6 +112,11 @@ function AppController() {
     setCategoryDocs([]);
     setPendingDocs([]);
     setReportedDocs([]);
+    setPendingPointEvents([]);
+    setPointSummary(null);
+    setPointTransactions([]);
+    setMyPointEvents([]);
+    setPointPolicy(null);
     setDuplicateByDocId({});
     setNotifications([]);
     setAdminUsers([]);
@@ -243,6 +255,24 @@ function AppController() {
     loadMyDocuments,
   });
 
+  const { loadPendingPointEvents, reviewPointEvent } = createPointEventFeature({
+    token,
+    call,
+    setStatus,
+    setPendingPointEvents,
+  });
+
+  const { loadAllPointData } = createPointsFeature({
+    token,
+    call,
+    user,
+    setPointSummary,
+    setPointTransactions,
+    setMyPointEvents,
+    setPointPolicy,
+    setUser,
+  });
+
   const { submitDocumentReport, loadReportedDocuments, resolveReportedDocument } =
     createReportFeature({
       token,
@@ -317,12 +347,14 @@ function AppController() {
         tasks.push(refreshCurrentUser());
         tasks.push(loadMyDocuments());
         tasks.push(loadNotifications());
+        tasks.push(loadAllPointData());
         if (user?.role === "admin") {
           tasks.push(loadAdminUsers());
         }
         if (hasModeratorRole(user?.role)) {
           tasks.push(loadPendingDocuments(token));
           tasks.push(loadReportedDocuments(token));
+          tasks.push(loadPendingPointEvents());
         }
       }
 
@@ -335,7 +367,11 @@ function AppController() {
   useEffect(() => {
     if (activeTab !== "moderation" || !token || !isModerator) return;
     call(async () => {
-      await Promise.all([loadPendingDocuments(token), loadReportedDocuments(token)]);
+      await Promise.all([
+        loadPendingDocuments(token),
+        loadReportedDocuments(token),
+        loadPendingPointEvents(),
+      ]);
     });
   }, [activeTab, token, isModerator]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -345,6 +381,11 @@ function AppController() {
       await loadAdminUsers();
     });
   }, [activeTab, token, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab !== "points" || !token) return;
+    loadAllPointData();
+  }, [activeTab, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!queryDocId || !token) return;
@@ -390,7 +431,7 @@ function AppController() {
   const stats = {
     followers: 0,
     uploads: myDocs.length,
-    upvotes: 0,
+    points: Number(user?.points || 0),
   };
 
   const findDocById = (documentId) => {
@@ -510,6 +551,11 @@ function AppController() {
     openPreviewReload,
     resolveFileUrl,
     myDocs,
+    pointSummary,
+    pointTransactions,
+    myPointEvents,
+    pointPolicy,
+    loadAllPointData,
     uploadForm,
     setUploadForm,
     topicPickerRef,
@@ -526,7 +572,9 @@ function AppController() {
     isModerator,
     pendingDocs,
     reportedDocs,
+    pendingPointEvents,
     resolveReportedDocument,
+    reviewPointEvent,
     loadDuplicateCandidates,
     moderateDocument,
     lockUnlockDelete,
