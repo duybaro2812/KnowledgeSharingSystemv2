@@ -98,10 +98,39 @@ const createDocumentReport = async ({ documentId, reporterUserId, reason }) => {
     return result.recordset[0];
 };
 
-const getPendingDocumentReportQueue = async () => {
+const getPendingDocumentReportQueue = async ({
+    reportStatus = 'open',
+    limit = 100,
+    offset = 0,
+} = {}) => {
     const pool = getPool();
+    const request = pool.request();
 
-    const result = await pool.request().query(`
+    const normalizedStatus = String(reportStatus || 'open').toLowerCase();
+    const safeLimit =
+        Number.isInteger(limit) && limit > 0 && limit <= 500
+            ? limit
+            : 100;
+    const safeOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
+
+    request.input('limit', sql.Int, safeLimit);
+    request.input('offset', sql.Int, safeOffset);
+
+    let reportWhereClause = "r.status IN (N'pending', N'reviewed')";
+
+    if (normalizedStatus === 'pending') {
+        reportWhereClause = "r.status = N'pending'";
+    } else if (normalizedStatus === 'reviewed') {
+        reportWhereClause = "r.status = N'reviewed'";
+    } else if (normalizedStatus === 'resolved') {
+        reportWhereClause = "r.status = N'resolved'";
+    } else if (normalizedStatus === 'dismissed') {
+        reportWhereClause = "r.status = N'dismissed'";
+    } else if (normalizedStatus === 'closed') {
+        reportWhereClause = "r.status IN (N'resolved', N'dismissed')";
+    }
+
+    const result = await request.query(`
         SELECT
             d.documentId,
             d.title,
@@ -119,7 +148,8 @@ const getPendingDocumentReportQueue = async () => {
             reportStats.totalReports,
             reportStats.uniqueReporterCount,
             reportStats.latestReportedAt,
-            latestReason.reason AS latestReportReason
+            latestReason.reason AS latestReportReason,
+            latestReason.status AS latestReportStatus
         FROM dbo.Documents d
         INNER JOIN dbo.Users ownerUser ON ownerUser.userId = d.ownerUserId
         INNER JOIN (
@@ -130,18 +160,67 @@ const getPendingDocumentReportQueue = async () => {
                 MAX(r.createdAt) AS latestReportedAt
             FROM dbo.Reports r
             WHERE r.documentId IS NOT NULL
-              AND r.status IN (N'pending', N'reviewed')
+              AND ${reportWhereClause}
             GROUP BY r.documentId
         ) reportStats ON reportStats.documentId = d.documentId
         OUTER APPLY (
-            SELECT TOP 1 r.reason
+            SELECT TOP 1 r.reason, r.status
             FROM dbo.Reports r
             WHERE r.documentId = d.documentId
-              AND r.status IN (N'pending', N'reviewed')
+              AND ${reportWhereClause}
             ORDER BY r.createdAt DESC, r.reportId DESC
         ) latestReason
         ORDER BY reportStats.uniqueReporterCount DESC, reportStats.latestReportedAt DESC;
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
     `);
+
+    return result.recordset;
+};
+
+const getOpenReporterUserIdsByDocument = async (documentId) => {
+    const pool = getPool();
+
+    const result = await pool
+        .request()
+        .input('documentId', sql.Int, documentId)
+        .query(`
+            SELECT DISTINCT r.reporterUserId
+            FROM dbo.Reports r
+            WHERE r.documentId = @documentId
+              AND r.status IN (N'pending', N'reviewed');
+        `);
+
+    return result.recordset.map((row) => row.reporterUserId);
+};
+
+const getDocumentReports = async ({ documentId, status = null }) => {
+    const pool = getPool();
+
+    const result = await pool
+        .request()
+        .input('documentId', sql.Int, documentId)
+        .input('status', sql.NVarChar(20), status)
+        .query(`
+            SELECT
+                r.reportId,
+                r.documentId,
+                r.reporterUserId,
+                reporter.name AS reporterName,
+                reporter.email AS reporterEmail,
+                r.reason,
+                r.status,
+                r.reviewedByUserId,
+                reviewer.name AS reviewedByName,
+                r.reviewNote,
+                r.createdAt,
+                r.reviewedAt
+            FROM dbo.Reports r
+            INNER JOIN dbo.Users reporter ON reporter.userId = r.reporterUserId
+            LEFT JOIN dbo.Users reviewer ON reviewer.userId = r.reviewedByUserId
+            WHERE r.documentId = @documentId
+              AND (@status IS NULL OR r.status = @status)
+            ORDER BY r.createdAt DESC, r.reportId DESC;
+        `);
 
     return result.recordset;
 };
@@ -180,5 +259,7 @@ module.exports = {
     REPORT_AUTO_LOCK_THRESHOLD,
     createDocumentReport,
     getPendingDocumentReportQueue,
+    getOpenReporterUserIdsByDocument,
+    getDocumentReports,
     resolveOpenDocumentReports,
 };

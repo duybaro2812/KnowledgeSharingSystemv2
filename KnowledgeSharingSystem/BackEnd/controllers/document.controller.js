@@ -4,6 +4,7 @@ const reportModel = require('../models/report.model');
 const notificationModel = require('../models/notification.model');
 const userModel = require('../models/user.model');
 const pointEventModel = require('../models/point-event.model');
+const { POINT_POLICY } = require('../config/point-policy');
 const {
     uploadDocumentBuffer,
     isCloudinaryAssetUrl,
@@ -134,7 +135,7 @@ const createDocument = async (req, res, next) => {
             await pointEventModel.createPointEvent({
                 userId: req.user.userId,
                 eventType: pointEventModel.EVENT_TYPES.UPLOAD_SUBMITTED,
-                points: 10,
+                points: POINT_POLICY.rewards.uploadSubmitted,
                 documentId,
                 metadata: {
                     source: 'document_upload',
@@ -335,6 +336,8 @@ const createDocumentReport = async (req, res, next) => {
             throw error;
         }
 
+        const reporterUserIds = await reportModel.getOpenReporterUserIdsByDocument(documentId);
+
         if (document.status === 'rejected') {
             const error = new Error('This document cannot be reported.');
             error.statusCode = 400;
@@ -410,12 +413,69 @@ const createDocumentReport = async (req, res, next) => {
 
 const getPendingReportedDocuments = async (req, res, next) => {
     try {
-        const reportedDocuments = await reportModel.getPendingDocumentReportQueue();
+        const { reportStatus, limit, offset } = req.query;
+        const parsedLimit = limit !== undefined ? Number(limit) : undefined;
+        const parsedOffset = offset !== undefined ? Number(offset) : undefined;
+
+        if (limit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit <= 0)) {
+            const error = new Error('limit must be a positive integer.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (offset !== undefined && (!Number.isInteger(parsedOffset) || parsedOffset < 0)) {
+            const error = new Error('offset must be a non-negative integer.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const reportedDocuments = await reportModel.getPendingDocumentReportQueue({
+            reportStatus: reportStatus || 'open',
+            limit: parsedLimit,
+            offset: parsedOffset,
+        });
 
         res.json({
             success: true,
             message: 'Pending reported documents fetched successfully.',
             data: reportedDocuments,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getDocumentReportHistory = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const { status } = req.query;
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (
+            status !== undefined &&
+            !['pending', 'reviewed', 'resolved', 'dismissed'].includes(String(status).toLowerCase())
+        ) {
+            const error = new Error(
+                "status must be one of: pending, reviewed, resolved, dismissed."
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const reports = await reportModel.getDocumentReports({
+            documentId,
+            status: status ? String(status).toLowerCase() : null,
+        });
+
+        res.json({
+            success: true,
+            message: 'Document report history fetched successfully.',
+            data: reports,
         });
     } catch (error) {
         next(error);
@@ -501,6 +561,29 @@ const resolveReportedDocument = async (req, res, next) => {
                 console.error('Failed to create unlock-after-report notification:', notifyError.message);
             }
 
+            try {
+                await Promise.all(
+                    reporterUserIds.map((reporterUserId) =>
+                        notificationModel.createNotification({
+                            userId: reporterUserId,
+                            type: 'report_resolved_unlocked',
+                            title: 'Report reviewed',
+                            message: `Your report on "${document.title}" was reviewed. Document remains available.`,
+                            metadata: {
+                                documentId,
+                                action,
+                                note: note || null,
+                            },
+                        })
+                    )
+                );
+            } catch (notifyError) {
+                console.error(
+                    'Failed to notify reporters for unlock-after-report:',
+                    notifyError.message
+                );
+            }
+
             const updatedDocument = await documentModel.getDocumentDetailById(documentId);
 
             res.json({
@@ -512,6 +595,7 @@ const resolveReportedDocument = async (req, res, next) => {
                         action,
                         note: note || null,
                         resolvedReports,
+                        notifiedReporters: reporterUserIds.length,
                     },
                 },
             });
@@ -566,6 +650,29 @@ const resolveReportedDocument = async (req, res, next) => {
             console.error('Failed to create delete-after-report notification:', notifyError.message);
         }
 
+        try {
+            await Promise.all(
+                reporterUserIds.map((reporterUserId) =>
+                    notificationModel.createNotification({
+                        userId: reporterUserId,
+                        type: 'report_resolved_deleted',
+                        title: 'Report confirmed',
+                        message: `Your report on "${document.title}" was confirmed. The document has been removed.`,
+                        metadata: {
+                            documentId,
+                            action,
+                            note: note || null,
+                        },
+                    })
+                )
+            );
+        } catch (notifyError) {
+            console.error(
+                'Failed to notify reporters for delete-after-report:',
+                notifyError.message
+            );
+        }
+
         res.json({
             success: true,
             message: 'Reported document was deleted successfully.',
@@ -577,6 +684,7 @@ const resolveReportedDocument = async (req, res, next) => {
                     note: note || null,
                     resolvedReports,
                     deductedPoints: deleteResult.deductedPoints,
+                    notifiedReporters: reporterUserIds.length,
                 },
             },
         });
@@ -660,7 +768,7 @@ const reviewDocument = async (req, res, next) => {
                 await pointEventModel.createPointEvent({
                     userId: updatedDocument.ownerUserId,
                     eventType: pointEventModel.EVENT_TYPES.UPLOAD_APPROVED,
-                    points: 30,
+                    points: POINT_POLICY.rewards.uploadApproved,
                     documentId,
                     metadata: {
                         source: 'document_review',
@@ -937,6 +1045,7 @@ module.exports = {
     getPendingDocuments,
     createDocumentReport,
     getPendingReportedDocuments,
+    getDocumentReportHistory,
     resolveReportedDocument,
     reviewDocument,
     lockDocument,

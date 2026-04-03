@@ -1,4 +1,6 @@
 const documentEngagementModel = require('../models/document-engagement.model');
+const { notifyUserIfDifferent } = require('../services/notification-dispatcher.service');
+const actorLabel = (user) => user?.name || user?.username || 'A user';
 
 const validateDocumentId = (id) => {
     const documentId = Number(id);
@@ -33,7 +35,7 @@ const ensureDocumentCanInteract = async (documentId) => {
 const getEngagement = async (req, res, next) => {
     try {
         const documentId = validateDocumentId(req.params.id);
-        await ensureDocumentCanInteract(documentId);
+        const document = await ensureDocumentCanInteract(documentId);
 
         const engagement = await documentEngagementModel.getDocumentEngagement({
             documentId,
@@ -74,6 +76,26 @@ const updateReaction = async (req, res, next) => {
             userId: req.user.userId,
             reactionType: normalizedReactionType,
         });
+
+        try {
+            if (normalizedReactionType) {
+                const actionText = normalizedReactionType === 'like' ? 'liked' : 'disliked';
+                await notifyUserIfDifferent({
+                    actorUserId: req.user.userId,
+                    receiverUserId: document.ownerUserId,
+                    type: `document_${normalizedReactionType}d`,
+                    title: `Your document received a ${normalizedReactionType}`,
+                    message: `${actorLabel(req.user)} ${actionText} your document "${document.title}".`,
+                    metadata: {
+                        documentId,
+                        reactorUserId: req.user.userId,
+                        reactionType: normalizedReactionType,
+                    },
+                });
+            }
+        } catch (notifyError) {
+            console.error('Failed to create reaction notification:', notifyError.message);
+        }
 
         const engagement = await documentEngagementModel.getDocumentEngagement({
             documentId,

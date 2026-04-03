@@ -1,4 +1,5 @@
 const { getPool, sql } = require('../utils/db');
+const { buildPointPolicyResponse } = require('../config/point-policy');
 
 const getMyPointSummary = async (userId) => {
     const pool = getPool();
@@ -99,19 +100,7 @@ const getMyPointEvents = async ({ userId, status = null, limit = 50 }) => {
     return result.recordset;
 };
 
-const getPointPolicy = () => ({
-    unlock: {
-        previewThreshold: 30,
-        fullViewThreshold: 40,
-        fullViewDailyLimitFor40To199: 3,
-    },
-    download: {
-        standardCost: 30,
-        priorityThreshold: 200,
-        priorityCost: 15,
-    },
-    note: 'Point events are applied after moderator/admin review based on platform policy.',
-});
+const getPointPolicy = () => buildPointPolicyResponse();
 
 module.exports = {
     getMyPointSummary,
@@ -119,4 +108,3 @@ module.exports = {
     getMyPointEvents,
     getPointPolicy,
 };
-

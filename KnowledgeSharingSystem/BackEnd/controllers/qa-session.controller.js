@@ -1,37 +1,8 @@
 const qaSessionModel = require('../models/qa-session.model');
 const pointEventModel = require('../models/point-event.model');
 const notificationModel = require('../models/notification.model');
-const userModel = require('../models/user.model');
-
-const SUGGESTED_POINT_BY_STARS = {
-    1: -20,
-    2: -10,
-    3: 0,
-    4: 10,
-    5: 20,
-};
-
-const notifyModerationTeam = async ({ type, title, message, metadata = null }) => {
-    const moderationUsers = await userModel.getActiveModeratorsAndAdmins();
-
-    if (!moderationUsers.length) {
-        return 0;
-    }
-
-    await Promise.all(
-        moderationUsers.map((moderator) =>
-            notificationModel.createNotification({
-                userId: moderator.userId,
-                type,
-                title,
-                message,
-                metadata,
-            })
-        )
-    );
-
-    return moderationUsers.length;
-};
+const { notifyModerators } = require('../services/notification-dispatcher.service');
+const { getSuggestedPointsByStars } = require('../config/point-policy');
 
 const createSession = async (req, res, next) => {
     try {
@@ -253,7 +224,7 @@ const rateSession = async (req, res, next) => {
             feedback,
         });
 
-        const suggestedPoints = SUGGESTED_POINT_BY_STARS[stars] ?? 0;
+        const suggestedPoints = getSuggestedPointsByStars(stars);
 
         const pointEvent = await pointEventModel.createPointEvent({
             userId: rated.ownerUserId,
@@ -271,7 +242,7 @@ const rateSession = async (req, res, next) => {
         });
 
         try {
-            await notifyModerationTeam({
+            await notifyModerators({
                 type: 'qa_rating_pending_review',
                 title: 'Q&A rating pending point review',
                 message: `Session #${rated.sessionId} was rated ${stars} star(s).`,

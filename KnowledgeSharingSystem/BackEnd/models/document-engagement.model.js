@@ -9,6 +9,7 @@ const getDocumentForEngagement = async (documentId) => {
         .query(`
             SELECT
                 d.documentId,
+                d.title,
                 d.ownerUserId,
                 d.status
             FROM dbo.Documents d

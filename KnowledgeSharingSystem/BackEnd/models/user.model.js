@@ -143,6 +143,25 @@ const getActiveModeratorsAndAdmins = async () => {
     return result.recordset;
 };
 
+const getActiveModerators = async () => {
+    const pool = getPool();
+
+    const result = await pool.request().query(`
+        SELECT
+            userId,
+            username,
+            name,
+            email,
+            role
+        FROM dbo.Users
+        WHERE isActive = 1
+          AND role = N'moderator'
+        ORDER BY userId;
+    `);
+
+    return result.recordset;
+};
+
 const updateUserRole = async ({ userId, role }) => {
     const pool = getPool();
 
@@ -265,6 +284,7 @@ module.exports = {
     getUserProfileById,
     setUserActiveStatus,
     getUsers,
+    getActiveModerators,
     getActiveModeratorsAndAdmins,
     updateUserRole,
     updateMyProfile,

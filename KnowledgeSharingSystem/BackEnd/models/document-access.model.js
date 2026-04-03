@@ -1,6 +1,5 @@
 const { getPool, sql } = require('../utils/db');
-
-const VIEW_LIMIT_30_TO_39_PER_DAY = 3;
+const { POINT_POLICY } = require('../config/point-policy');
 
 const getDocumentForAccess = async (documentId) => {
     const pool = getPool();
@@ -191,7 +190,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
     const points = await getUserPoints(userId);
     const todayFullViewCount = await getTodayFullViewCount(userId);
 
-    if (points < 30) {
+    if (points < POINT_POLICY.unlock.previewThreshold) {
         return {
             points,
             canPreview: true,
@@ -202,19 +201,20 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
             viewsRemainingToday: 0,
             downloadCost: null,
             tier: 'preview_only',
-            reason: 'Need at least 30 points to unlock full view.',
+            reason: `Need at least ${POINT_POLICY.unlock.previewThreshold} points to unlock full view.`,
         };
     }
 
-    if (points < 40) {
-        const viewsRemainingToday = Math.max(0, VIEW_LIMIT_30_TO_39_PER_DAY - todayFullViewCount);
+    if (points < POINT_POLICY.unlock.fullViewThreshold) {
+        const viewLimit = POINT_POLICY.unlock.fullViewDailyLimitFor30To39;
+        const viewsRemainingToday = Math.max(0, viewLimit - todayFullViewCount);
 
         return {
             points,
             canPreview: true,
             canFullView: viewsRemainingToday > 0,
             canDownload: false,
-            dailyViewLimit: VIEW_LIMIT_30_TO_39_PER_DAY,
+            dailyViewLimit: viewLimit,
             todayFullViewCount,
             viewsRemainingToday,
             downloadCost: null,
@@ -222,11 +222,14 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
             reason:
                 viewsRemainingToday > 0
                     ? null
-                    : `Daily full-view limit reached (${VIEW_LIMIT_30_TO_39_PER_DAY}).`,
+                    : `Daily full-view limit reached (${viewLimit}).`,
         };
     }
 
-    const downloadCost = points >= 200 ? 15 : 30;
+    const downloadCost =
+        points >= POINT_POLICY.download.priorityThreshold
+            ? POINT_POLICY.download.priorityCost
+            : POINT_POLICY.download.standardCost;
 
     return {
         points,
@@ -237,7 +240,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
         todayFullViewCount,
         viewsRemainingToday: null,
         downloadCost,
-        tier: points >= 200 ? 'priority' : 'standard',
+        tier: points >= POINT_POLICY.download.priorityThreshold ? 'priority' : 'standard',
         reason: points >= downloadCost ? null : 'Insufficient points for download.',
     };
 };

@@ -24,6 +24,13 @@ router.get(
     userController.getUsers
 );
 
+router.get(
+    '/audit-logs',
+    authMiddleware,
+    roleMiddleware('admin'),
+    userController.getAdminActionLogs
+);
+
 router.patch(
     '/:id/active-status',
     authMiddleware,

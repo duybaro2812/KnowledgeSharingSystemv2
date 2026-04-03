@@ -28,6 +28,12 @@ router.get(
     roleMiddleware('admin', 'moderator'),
     documentController.getPendingReportedDocuments
 );
+router.get(
+    '/:id/reports',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getDocumentReportHistory
+);
 router.patch(
     '/:id/review',
     authMiddleware,

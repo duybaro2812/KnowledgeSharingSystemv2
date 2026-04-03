@@ -412,38 +412,147 @@ a {
 }
 
 .bell-btn {
+  position: relative;
   font-size: 0;
 }
 
-.bell-icon {
-  width: 16px;
-  height: 16px;
-  position: relative;
-  border: 2px solid #6c7d98;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  display: inline-block;
+.bell-svg {
+  width: 20px;
+  height: 20px;
+  color: #5a7095;
 }
 
-.bell-icon::before {
-  content: "";
+.bell-dot {
   position: absolute;
-  left: -2px;
-  right: -2px;
   top: 8px;
-  border-top: 2px solid #6c7d98;
+  right: 9px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef3333;
+  border: 2px solid #fff;
 }
 
-.bell-icon::after {
-  content: "";
+.notification-wrap {
+  position: relative;
+}
+
+.notification-dropdown {
   position: absolute;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #6c7d98;
-  left: 50%;
-  bottom: -7px;
-  transform: translateX(-50%);
+  right: 0;
+  top: calc(100% + 8px);
+  width: min(420px, 88vw);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(12, 33, 68, 0.2);
+  z-index: 45;
+  overflow: hidden;
+}
+
+.notification-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e4ebf8;
+}
+
+.notification-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.link-pill {
+  border: 1px solid #b9cae7;
+  background: #f6f9ff;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: #2859a8;
+}
+
+.notification-filters {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.notification-filters button {
+  border-radius: 999px;
+  border: 1px solid #bfd0ec;
+  padding: 6px 12px;
+  background: #fff;
+  color: #54709f;
+  font-size: 13px;
+}
+
+.notification-filters button.active {
+  background: #eaf1ff;
+  border-color: #90afe3;
+  color: #0f4db8;
+  font-weight: 600;
+}
+
+.notification-list-mini {
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.notification-mini-item {
+  border: 1px solid #d9e3f5;
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.notification-mini-item.unread {
+  background: #f3f7ff;
+  border-color: #a8c0ea;
+}
+
+.notification-mini-item.read {
+  background: #fff;
+}
+
+.notification-mini-main b {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.notification-mini-main p {
+  margin: 0 0 6px;
+  color: #39557f;
+  font-size: 14px;
+}
+
+.notification-mini-main small {
+  color: #6a81a5;
+  font-size: 12px;
+}
+
+.mini-mark-read {
+  align-self: center;
+  border: 1px solid #b7c9e8;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #fff;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.notification-empty {
+  margin: 0;
+  color: #6a81a5;
+  font-size: 14px;
+  padding: 10px 2px;
 }
 
 .mini-avatar {
@@ -1191,6 +1300,89 @@ a {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.comments-panel {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  background: #fff;
+}
+
+.comments-panel h3 {
+  margin: 0 0 10px;
+}
+
+.comment-editor {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.comment-editor input {
+  flex: 1;
+}
+
+.comment-list {
+  display: grid;
+  gap: 10px;
+}
+
+.comment-item {
+  border: 1px solid #dbe5f5;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fbfdff;
+}
+
+.comment-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.comment-time {
+  font-size: 12px;
+  color: #6f809d;
+}
+
+.comment-content {
+  margin: 6px 0;
+  white-space: pre-wrap;
+}
+
+.comment-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.comment-actions button {
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.reply-editor {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.reply-editor input {
+  flex: 1;
+}
+
+.comment-children {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.comment-empty {
+  margin: 0;
+  color: var(--sub);
 }
 
 .sr-only {

@@ -25,6 +25,9 @@ function DashboardShell(props) {
     toggleDislike,
     toggleSave,
     onReportFromPreview,
+    previewComments,
+    createCommentForPreview,
+    createReplyForPreview,
   } = props;
   const roleClass = `role-${user?.role || "user"}`;
 
@@ -57,6 +60,9 @@ function DashboardShell(props) {
             onToggleDislike={toggleDislike}
             onToggleSave={toggleSave}
             onReport={onReportFromPreview}
+            comments={previewComments}
+            onCreateComment={createCommentForPreview}
+            onCreateReply={createReplyForPreview}
           />
         )}
       </main>

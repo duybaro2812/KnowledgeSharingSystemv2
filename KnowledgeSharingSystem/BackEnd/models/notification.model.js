@@ -1,9 +1,10 @@
 const { getPool, sql } = require('../utils/db');
+const notificationStream = require('../services/notification-stream.service');
 
 const createNotification = async ({ userId, type, title, message, metadata = null }) => {
     const pool = getPool();
 
-    await pool
+    const result = await pool
         .request()
         .input('userId', sql.Int, userId)
         .input('type', sql.NVarChar(50), type)
@@ -12,8 +13,32 @@ const createNotification = async ({ userId, type, title, message, metadata = nul
         .input('metadata', sql.NVarChar(sql.MAX), metadata ? JSON.stringify(metadata) : null)
         .query(`
             INSERT INTO dbo.Notifications (userId, type, title, message, metadata)
+            OUTPUT
+                inserted.notificationId,
+                inserted.userId,
+                inserted.type,
+                inserted.title,
+                inserted.message,
+                inserted.metadata,
+                inserted.isRead,
+                inserted.createdAt,
+                inserted.readAt
             VALUES (@userId, @type, @title, @message, @metadata);
         `);
+
+    const inserted = result.recordset?.[0] || null;
+
+    if (inserted) {
+        notificationStream.pushToUser({
+            userId,
+            payload: {
+                event: 'notification_created',
+                data: inserted,
+            },
+        });
+    }
+
+    return inserted;
 };
 
 const getMyNotifications = async ({ userId, isRead = null }) => {

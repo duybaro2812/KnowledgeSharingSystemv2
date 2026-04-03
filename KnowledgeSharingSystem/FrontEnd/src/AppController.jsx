@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { apiRequest } from "./api";
+import { API_ORIGIN, apiRequest } from "./api";
 import AuthShell from "./views/auth.view";
 import DashboardShell from "./views/dashboard.view";
 import {
@@ -11,6 +11,7 @@ import {
 } from "./models/app.constants";
 import { createAuthFeature } from "./services/auth.service";
 import { createCategoryFeature } from "./services/category.service";
+import { createCommentFeature } from "./services/comment.service";
 import { createDataFeature } from "./services/data.service";
 import { createEngagementFeature } from "./services/engagement.service";
 import { createModerationFeature } from "./services/moderation.service";
@@ -71,6 +72,7 @@ function AppController() {
   const [adminUsers, setAdminUsers] = useState([]);
   const [duplicateByDocId, setDuplicateByDocId] = useState({});
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [previewComments, setPreviewComments] = useState([]);
   const [docEngagementById, setDocEngagementById] = useState({});
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [categoryDocs, setCategoryDocs] = useState([]);
@@ -121,6 +123,7 @@ function AppController() {
     setNotifications([]);
     setAdminUsers([]);
     setDocEngagementById({});
+    setPreviewComments([]);
     setStatus("");
     setError("");
   };
@@ -302,6 +305,13 @@ function AppController() {
     setDocEngagementById,
   });
 
+  const { loadCommentsByDocument, createComment, createReply } = createCommentFeature({
+    token,
+    call,
+    setStatus,
+    setPreviewComments,
+  });
+
   const {
     handleLogin,
     handleRequestOtp,
@@ -401,6 +411,38 @@ function AppController() {
   }, [queryDocId, token, docs, myDocs, pendingDocs, reportedDocs, categoryDocs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (!token) return undefined;
+
+    const streamUrl = `${API_ORIGIN}/api/notifications/stream?token=${encodeURIComponent(token)}`;
+    const eventSource = new EventSource(streamUrl);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.event !== "notification_created" || !payload?.data) return;
+
+        setNotifications((prev) => {
+          const list = Array.isArray(prev) ? prev : [];
+          if (list.some((item) => Number(item.notificationId) === Number(payload.data.notificationId))) {
+            return list;
+          }
+          return [payload.data, ...list];
+        });
+      } catch {
+        // ignore malformed stream payload
+      }
+    };
+
+    eventSource.onerror = () => {
+      // Browser will auto-reconnect for EventSource.
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [token]);
+
+  useEffect(() => {
     const targetDocId = Number(previewDoc?.documentId);
     if (!token || !Number.isInteger(targetDocId) || targetDocId <= 0) return;
 
@@ -408,6 +450,18 @@ function AppController() {
       await fetchDocumentEngagement(targetDocId);
     });
   }, [previewDoc?.documentId, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const targetDocId = Number(previewDoc?.documentId);
+    if (!Number.isInteger(targetDocId) || targetDocId <= 0) {
+      setPreviewComments([]);
+      return;
+    }
+
+    call(async () => {
+      await loadCommentsByDocument(targetDocId);
+    });
+  }, [previewDoc?.documentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!["verify-otp", "forgot-verify"].includes(authMode) || resendCooldown <= 0) return;
@@ -470,6 +524,67 @@ function AppController() {
   const toggleSave = async (documentId) => {
     const isSaved = Boolean(docEngagementById[documentId]?.isSaved);
     await updateDocumentSavedState(documentId, !isSaved);
+  };
+
+  const parseNotificationMetadata = (rawMetadata) => {
+    if (!rawMetadata) return null;
+    if (typeof rawMetadata === "object") return rawMetadata;
+    if (typeof rawMetadata !== "string") return null;
+    try {
+      return JSON.parse(rawMetadata);
+    } catch {
+      return null;
+    }
+  };
+
+  const openFromNotification = async (notification) => {
+    if (!notification) return;
+
+    await call(async () => {
+      if (!notification.isRead) {
+        await markRead(notification.notificationId);
+      }
+
+      const type = String(notification.type || "").toLowerCase();
+
+      if (
+        type.includes("point") ||
+        type.includes("document_approved") ||
+        type.includes("qa_session_rated") ||
+        type.includes("qa_rating")
+      ) {
+        setActiveTab("points");
+        await loadAllPointData();
+        return;
+      }
+
+      const metadata = parseNotificationMetadata(notification.metadata);
+      const documentId = Number(metadata?.documentId || metadata?.document?.documentId || 0);
+
+      if (Number.isInteger(documentId) && documentId > 0) {
+        try {
+          const payload = await apiRequest(`/documents/${documentId}`, { token });
+          const doc = payload?.data || null;
+          if (doc) {
+            openPreview(doc);
+            setActiveTab("reader");
+            return;
+          }
+        } catch {
+          // Fallback to tab-based navigation below if detail fetch fails.
+        }
+      }
+
+      if (type.includes("point") || type.includes("approved") || type.includes("qa_rating")) {
+        setActiveTab("points");
+      } else if (type.includes("report") || type.includes("moderation")) {
+        setActiveTab("moderation");
+      } else if (type.includes("comment") || type.includes("document")) {
+        setActiveTab("library");
+      } else {
+        setActiveTab("notifications");
+      }
+    });
   };
 
   const topicSuggestions = categories.filter((c) => {
@@ -585,6 +700,7 @@ function AppController() {
     setUserActiveStatus,
     deleteUserAccount,
     markRead,
+    openFromNotification,
     handleCreateCategory,
     newCategoryForm,
     setNewCategoryForm,
@@ -602,6 +718,14 @@ function AppController() {
         return;
       }
       setPreviewDoc(null);
+      setPreviewComments([]);
+    },
+    previewComments,
+    createCommentForPreview: async (documentId, content) => {
+      await createComment(documentId, content);
+    },
+    createReplyForPreview: async (parentCommentId, content, documentId) => {
+      await createReply(parentCommentId, content, documentId);
     },
     getDocReactionCounts,
     toggleLike,

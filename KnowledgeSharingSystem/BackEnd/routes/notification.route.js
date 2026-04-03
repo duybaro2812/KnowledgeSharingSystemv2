@@ -4,6 +4,7 @@ const notificationController = require('../controllers/notification.controller')
 
 const router = express.Router();
 
+router.get('/stream', notificationController.streamNotifications);
 router.get('/my', authMiddleware, notificationController.getMyNotifications);
 router.patch('/:id/read', authMiddleware, notificationController.markNotificationAsRead);
 

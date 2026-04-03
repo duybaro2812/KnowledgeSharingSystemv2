@@ -1,6 +1,7 @@
 const express = require('express');
 const authRoutes = require('./auth.route');
 const categoryRoutes = require('./category.route');
+const commentRoutes = require('./comment.route');
 const documentRoutes = require('./document.route');
 const notificationRoutes = require('./notification.route');
 const pointRoutes = require('./point.route');
@@ -18,6 +19,7 @@ router.get('/health', (req, res) => {
 
 router.use('/auth', authRoutes);
 router.use('/categories', categoryRoutes);
+router.use('/', commentRoutes);
 router.use('/documents', documentRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/points', pointRoutes);

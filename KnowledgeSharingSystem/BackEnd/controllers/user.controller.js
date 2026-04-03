@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const userModel = require('../models/user.model');
+const adminActionLogModel = require('../models/admin-action-log.model');
 
 const setUserActiveStatus = async (req, res, next) => {
     try {
@@ -18,12 +19,31 @@ const setUserActiveStatus = async (req, res, next) => {
             throw error;
         }
 
+        const beforeProfile = await userModel.getUserProfileById(userId);
+
         await userModel.setUserActiveStatus({
             userId,
             isActive,
         });
 
         const updatedProfile = await userModel.getUserProfileById(userId);
+
+        if (beforeProfile && updatedProfile) {
+            await adminActionLogModel.createAdminActionLog({
+                actorUserId: req.user.userId,
+                targetUserId: userId,
+                actionType: isActive ? 'user_unlocked' : 'user_locked',
+                oldValue: {
+                    isActive: beforeProfile.isActive,
+                    role: beforeProfile.role,
+                },
+                newValue: {
+                    isActive: updatedProfile.isActive,
+                    role: updatedProfile.role,
+                },
+                note: isActive ? 'Admin unlocked user account.' : 'Admin locked user account.',
+            });
+        }
 
         res.json({
             success: true,
@@ -68,6 +88,8 @@ const updateUserRole = async (req, res, next) => {
             throw error;
         }
 
+        const beforeProfile = await userModel.getUserProfileById(userId);
+
         const affectedRows = await userModel.updateUserRole({
             userId,
             role,
@@ -80,6 +102,23 @@ const updateUserRole = async (req, res, next) => {
         }
 
         const updatedProfile = await userModel.getUserProfileById(userId);
+
+        if (beforeProfile && updatedProfile) {
+            await adminActionLogModel.createAdminActionLog({
+                actorUserId: req.user.userId,
+                targetUserId: userId,
+                actionType: role === 'moderator' ? 'user_promoted_moderator' : 'user_demoted_user',
+                oldValue: {
+                    role: beforeProfile.role,
+                    isActive: beforeProfile.isActive,
+                },
+                newValue: {
+                    role: updatedProfile.role,
+                    isActive: updatedProfile.isActive,
+                },
+                note: role === 'moderator' ? 'Admin promoted user to moderator.' : 'Admin demoted user to basic user role.',
+            });
+        }
 
         res.json({
             success: true,
@@ -190,6 +229,8 @@ const deleteUserAccount = async (req, res, next) => {
             throw error;
         }
 
+        const beforeProfile = await userModel.getUserProfileById(userId);
+
         const affectedRows = await userModel.softDeleteUserByAdmin({ userId });
 
         if (!affectedRows) {
@@ -199,6 +240,29 @@ const deleteUserAccount = async (req, res, next) => {
         }
 
         const updatedProfile = await userModel.getUserProfileById(userId);
+
+        if (beforeProfile && updatedProfile) {
+            await adminActionLogModel.createAdminActionLog({
+                actorUserId: req.user.userId,
+                targetUserId: userId,
+                actionType: 'user_soft_deleted',
+                oldValue: {
+                    username: beforeProfile.username,
+                    email: beforeProfile.email,
+                    role: beforeProfile.role,
+                    isActive: beforeProfile.isActive,
+                    isVerified: beforeProfile.isVerified,
+                },
+                newValue: {
+                    username: updatedProfile.username,
+                    email: updatedProfile.email,
+                    role: updatedProfile.role,
+                    isActive: updatedProfile.isActive,
+                    isVerified: updatedProfile.isVerified,
+                },
+                note: 'Admin performed soft delete user action.',
+            });
+        }
 
         res.json({
             success: true,
@@ -210,8 +274,29 @@ const deleteUserAccount = async (req, res, next) => {
     }
 };
 
+const getAdminActionLogs = async (req, res, next) => {
+    try {
+        const page = Number(req.query.page || 1);
+        const pageSize = Number(req.query.pageSize || 30);
+
+        const logs = await adminActionLogModel.getAdminActionLogs({
+            page: Number.isInteger(page) ? page : 1,
+            pageSize: Number.isInteger(pageSize) ? pageSize : 30,
+        });
+
+        res.json({
+            success: true,
+            message: 'Admin action logs fetched successfully.',
+            data: logs,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getUsers,
+    getAdminActionLogs,
     setUserActiveStatus,
     updateUserRole,
     updateMyProfile,
