@@ -36,6 +36,7 @@ const inferActionByType = (type) => {
         document_deleted: 'document.deleted',
         document_auto_locked: 'document.auto_locked',
         document_reported: 'document.reported',
+        plagiarism_suspected: 'document.plagiarism_suspected',
         report_resolved_unlocked: 'report.resolved_unlock',
         report_resolved_deleted: 'report.resolved_delete',
         document_liked: 'document.liked',

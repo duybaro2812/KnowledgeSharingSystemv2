@@ -11,6 +11,7 @@ const {
     deleteCloudinaryRawByUrl,
     deleteLocalUploadedFileByUrl,
 } = require('../services/cloudinary.service');
+const { buildPlagiarismAssessment } = require('../services/plagiarism.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
 
@@ -42,6 +43,17 @@ const notifyModerationTeam = async ({ type, title, message, metadata = null }) =
     );
 
     return moderationUsers.length;
+};
+
+const checkDocumentPlagiarismInternal = async (documentId) => {
+    const currentDocument = await documentModel.getDocumentDetailById(documentId);
+    const duplicateCandidates = await documentModel.findDuplicateDocumentCandidates(documentId);
+
+    return buildPlagiarismAssessment({
+        documentId,
+        currentDocument: currentDocument || {},
+        candidates: duplicateCandidates,
+    });
 };
 
 const getDocuments = async (req, res, next) => {
@@ -130,6 +142,36 @@ const createDocument = async (req, res, next) => {
         });
 
         const document = await documentModel.getDocumentDetailById(documentId);
+        const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
+
+        if (plagiarismCheck.candidateCount > 0) {
+            const topCandidate = plagiarismCheck.topCandidates?.[0] || null;
+            const plagiarismPercent = Number(plagiarismCheck.maxPlagiarismPercent || 0);
+            const comparedDocumentTitle = topCandidate?.title || 'unknown document';
+
+            try {
+                await notifyModerationTeam({
+                    type: 'plagiarism_suspected',
+                    title: 'Kết quả kiểm tra đạo văn',
+                    message: `Tài liệu "${title}" có dấu hiệu đạo văn khoảng ${plagiarismPercent}% so với tài liệu "${comparedDocumentTitle}".`,
+                    metadata: {
+                        documentId,
+                        comparedDocumentId: topCandidate?.documentId || null,
+                        comparedDocumentTitle,
+                        plagiarismPercent,
+                        thresholdPercent: plagiarismCheck.thresholdPercent,
+                        aboveThreshold: Boolean(plagiarismCheck.aboveThreshold),
+                        riskLevel: plagiarismCheck.riskLevel,
+                        candidateCount: plagiarismCheck.candidateCount,
+                        duplicateReasons: (plagiarismCheck.topCandidates || []).map(
+                            (item) => item.duplicateReason
+                        ),
+                    },
+                });
+            } catch (notifyError) {
+                console.error('Failed to notify moderation team for plagiarism check:', notifyError.message);
+            }
+        }
 
         try {
             await pointEventModel.createPointEvent({
@@ -149,7 +191,42 @@ const createDocument = async (req, res, next) => {
         res.status(201).json({
             success: true,
             message: 'Document created successfully.',
-            data: document,
+            data: {
+                ...document,
+                plagiarismCheck,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const checkDocumentPlagiarism = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+        const isOwner = Number(document.ownerUserId) === Number(req.user.userId);
+        const isPrivileged = ['admin', 'moderator'].includes(req.user.role);
+
+        if (!isOwner && !isPrivileged) {
+            const error = new Error('You do not have permission to check plagiarism for this document.');
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
+
+        res.json({
+            success: true,
+            message: 'Plagiarism check completed successfully.',
+            data: plagiarismCheck,
         });
     } catch (error) {
         next(error);
@@ -1040,6 +1117,7 @@ module.exports = {
     createDocument,
     updateDocument,
     getDuplicateCandidates,
+    checkDocumentPlagiarism,
     getAllUploadedDocuments,
     getMyUploadedDocuments,
     getPendingDocuments,
