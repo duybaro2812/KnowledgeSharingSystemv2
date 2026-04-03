@@ -4,6 +4,7 @@ const reportModel = require('../models/report.model');
 const notificationModel = require('../models/notification.model');
 const userModel = require('../models/user.model');
 const pointEventModel = require('../models/point-event.model');
+const documentPlagiarismModel = require('../models/document-plagiarism.model');
 const { POINT_POLICY } = require('../config/point-policy');
 const {
     uploadDocumentBuffer,
@@ -12,6 +13,7 @@ const {
     deleteLocalUploadedFileByUrl,
 } = require('../services/cloudinary.service');
 const { buildPlagiarismAssessment } = require('../services/plagiarism.service');
+const { extractTextFromDocument } = require('../services/document-text-extraction.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
 
@@ -48,11 +50,34 @@ const notifyModerationTeam = async ({ type, title, message, metadata = null }) =
 const checkDocumentPlagiarismInternal = async (documentId) => {
     const currentDocument = await documentModel.getDocumentDetailById(documentId);
     const duplicateCandidates = await documentModel.findDuplicateDocumentCandidates(documentId);
+    const currentArtifact = await documentPlagiarismModel.getDocumentTextArtifact(documentId);
+    const textCandidates = await documentPlagiarismModel.getTextSimilarityCandidates({ documentId });
+
+    const combinedCandidatesById = new Map();
+
+    for (const candidate of duplicateCandidates || []) {
+        combinedCandidatesById.set(Number(candidate.documentId), { ...candidate });
+    }
+
+    for (const candidate of textCandidates || []) {
+        const key = Number(candidate.documentId);
+        const previous = combinedCandidatesById.get(key) || {};
+        combinedCandidatesById.set(key, {
+            ...previous,
+            ...candidate,
+            duplicateReason: previous.duplicateReason || candidate.duplicateReason || null,
+        });
+    }
+
+    const currentDocumentForCheck = {
+        ...(currentDocument || {}),
+        normalizedText: currentArtifact?.normalizedText || '',
+    };
 
     return buildPlagiarismAssessment({
         documentId,
-        currentDocument: currentDocument || {},
-        candidates: duplicateCandidates,
+        currentDocument: currentDocumentForCheck,
+        candidates: [...combinedCandidatesById.values()],
     });
 };
 
@@ -142,6 +167,24 @@ const createDocument = async (req, res, next) => {
         });
 
         const document = await documentModel.getDocumentDetailById(documentId);
+
+        const extractedDocumentText = await extractTextFromDocument({
+            buffer: req.file.buffer,
+            originalFileName: req.file.originalname,
+            mimeType: req.file.mimetype,
+            title,
+            description,
+        });
+
+        await documentPlagiarismModel.upsertDocumentTextArtifact({
+            documentId,
+            extractedText: extractedDocumentText.extractedText,
+            normalizedText: extractedDocumentText.normalizedText,
+            tokenCount: extractedDocumentText.tokenCount,
+            extractionMethod: extractedDocumentText.extractionMethod,
+            extractionWarning: extractedDocumentText.extractionWarning,
+        });
+
         const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
 
         if (plagiarismCheck.candidateCount > 0) {
@@ -166,6 +209,7 @@ const createDocument = async (req, res, next) => {
                         duplicateReasons: (plagiarismCheck.topCandidates || []).map(
                             (item) => item.duplicateReason
                         ),
+                        extractionWarning: extractedDocumentText.extractionWarning || null,
                     },
                 });
             } catch (notifyError) {
@@ -194,6 +238,11 @@ const createDocument = async (req, res, next) => {
             data: {
                 ...document,
                 plagiarismCheck,
+                extraction: {
+                    method: extractedDocumentText.extractionMethod,
+                    tokenCount: extractedDocumentText.tokenCount,
+                    warning: extractedDocumentText.extractionWarning || null,
+                },
             },
         });
     } catch (error) {
@@ -277,6 +326,23 @@ const updateDocument = async (req, res, next) => {
             fileSizeBytes = req.file.size;
             mimeType = req.file.mimetype;
             fileHash = getFileHashFromBuffer(req.file.buffer);
+
+            const extractedDocumentText = await extractTextFromDocument({
+                buffer: req.file.buffer,
+                originalFileName: req.file.originalname,
+                mimeType: req.file.mimetype,
+                title,
+                description,
+            });
+
+            await documentPlagiarismModel.upsertDocumentTextArtifact({
+                documentId,
+                extractedText: extractedDocumentText.extractedText,
+                normalizedText: extractedDocumentText.normalizedText,
+                tokenCount: extractedDocumentText.tokenCount,
+                extractionMethod: extractedDocumentText.extractionMethod,
+                extractionWarning: extractedDocumentText.extractionWarning,
+            });
         }
 
         await documentModel.updateDocument({

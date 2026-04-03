@@ -35,6 +35,12 @@ router.get(
     documentController.getDocumentReportHistory
 );
 router.get('/:id/plagiarism-check', authMiddleware, documentController.checkDocumentPlagiarism);
+router.get(
+    '/:id/check-duplicate',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.checkDocumentPlagiarism
+);
 router.patch(
     '/:id/review',
     authMiddleware,

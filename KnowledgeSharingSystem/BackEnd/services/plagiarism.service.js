@@ -21,6 +21,19 @@ const tokenize = (text) => {
     return normalized.split(' ').filter(Boolean);
 };
 
+const buildShingles = (tokens, size = 3) => {
+    if (!Array.isArray(tokens) || tokens.length < size) {
+        return [];
+    }
+
+    const shingles = [];
+    for (let i = 0; i <= tokens.length - size; i += 1) {
+        shingles.push(tokens.slice(i, i + size).join(' '));
+    }
+
+    return shingles;
+};
+
 const jaccardSimilarity = (tokensA, tokensB) => {
     if (!tokensA.length || !tokensB.length) {
         return 0;
@@ -59,6 +72,10 @@ const scoreByDuplicateReason = (duplicateReason) => {
             return 100;
         case 'trung_fileHash':
             return 97;
+        case 'trung_title_va_fileUrl':
+            return 94;
+        case 'trung_fileUrl':
+            return 90;
         case 'trung_title':
             return 65;
         default:
@@ -67,10 +84,27 @@ const scoreByDuplicateReason = (duplicateReason) => {
 };
 
 const buildCandidateScore = ({ currentDocument, candidate }) => {
-    const currentTokens = tokenize(currentDocument.title);
-    const candidateTokens = tokenize(candidate.title);
-    const titleSimilarity = jaccardSimilarity(currentTokens, candidateTokens);
+    const currentTitleTokens = tokenize(currentDocument.title);
+    const candidateTitleTokens = tokenize(candidate.title);
+    const titleSimilarity = jaccardSimilarity(currentTitleTokens, candidateTitleTokens);
     const titleScore = Math.round(titleSimilarity * 70);
+
+    const currentContentTokens = tokenize(currentDocument.normalizedText);
+    const candidateContentTokens = tokenize(candidate.normalizedText);
+    const contentTokenSimilarity = jaccardSimilarity(currentContentTokens, candidateContentTokens);
+
+    const currentContentShingles = buildShingles(currentContentTokens, 3);
+    const candidateContentShingles = buildShingles(candidateContentTokens, 3);
+    const contentShingleSimilarity = jaccardSimilarity(
+        currentContentShingles,
+        candidateContentShingles
+    );
+
+    const contentSimilarity =
+        contentShingleSimilarity > 0
+            ? contentShingleSimilarity
+            : contentTokenSimilarity;
+    const contentScore = Math.round(contentSimilarity * 100);
 
     const sameHash =
         currentDocument.fileHash &&
@@ -86,13 +120,17 @@ const buildCandidateScore = ({ currentDocument, candidate }) => {
 
     const reasonScore = scoreByDuplicateReason(candidate.duplicateReason);
 
-    const finalScore = Math.max(reasonScore, Math.min(100, Math.max(hashScore, titleScore + fileNameBoost)));
+    const weightedContentScore = Math.round(contentScore * 0.8 + titleScore * 0.2);
+    const mergedHeuristicScore = Math.max(weightedContentScore, titleScore + fileNameBoost);
+    const finalScore = Math.max(reasonScore, Math.min(100, Math.max(hashScore, mergedHeuristicScore)));
 
     return {
         ...candidate,
         sameHash,
         sameFileName,
         titleSimilarity: Number(titleSimilarity.toFixed(4)),
+        contentTokenSimilarity: Number(contentTokenSimilarity.toFixed(4)),
+        contentShingleSimilarity: Number(contentShingleSimilarity.toFixed(4)),
         plagiarismPercent: finalScore,
     };
 };
