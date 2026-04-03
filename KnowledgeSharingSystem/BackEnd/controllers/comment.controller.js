@@ -32,39 +32,6 @@ const createPointEventSafe = async (payload) => {
     }
 };
 
-const createAndApprovePointEventSafe = async ({
-    userId,
-    eventType,
-    points,
-    documentId,
-    metadata,
-    moderatorUserId,
-}) => {
-    try {
-        const createdEvent = await pointEventModel.createPointEvent({
-            userId,
-            eventType,
-            points,
-            documentId,
-            metadata,
-        });
-
-        if (!createdEvent?.eventId || createdEvent?.status !== 'pending') {
-            return null;
-        }
-
-        return await pointEventModel.reviewPointEvent({
-            eventId: Number(createdEvent.eventId),
-            reviewedByUserId: moderatorUserId,
-            decision: 'approved',
-            reviewNote: 'Auto-approved from comment moderation.',
-        });
-    } catch (pointError) {
-        console.error('Failed to auto-approve comment point event:', pointError.message);
-        return null;
-    }
-};
-
 const getDocumentComments = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
@@ -305,6 +272,7 @@ const reviewComment = async (req, res, next) => {
         }
 
         const reviewedComment = await commentModel.getCommentById(commentId);
+        const pendingPointEventIds = [];
 
         try {
             await notifyUserIfDifferent({
@@ -314,7 +282,7 @@ const reviewComment = async (req, res, next) => {
                 title: decision === 'approved' ? 'Comment approved' : 'Comment rejected',
                 message:
                     decision === 'approved'
-                        ? 'Your comment was approved by moderation.'
+                        ? 'Your comment was approved by moderation. Point rewards are pending point moderation review.'
                         : 'Your comment was rejected by moderation.',
                 metadata: {
                     commentId,
@@ -325,7 +293,7 @@ const reviewComment = async (req, res, next) => {
             });
 
             if (decision === 'approved') {
-                await createAndApprovePointEventSafe({
+                const commenterPointEvent = await createPointEventSafe({
                     userId: reviewedComment.authorUserId,
                     eventType: 'comment_given',
                     points: POINT_POLICY.rewards.commentGiven,
@@ -333,16 +301,19 @@ const reviewComment = async (req, res, next) => {
                     metadata: {
                         source: reviewedComment.parentCommentId ? 'comment_reply' : 'document_comment',
                         commentId,
+                        approvedByCommentReviewerUserId: req.user.userId,
                     },
-                    moderatorUserId: req.user.userId,
                 });
+                if (commenterPointEvent?.eventId) {
+                    pendingPointEventIds.push(Number(commenterPointEvent.eventId));
+                }
 
                 const rewardTarget = await commentModel.getCommentRewardTargetUserId(commentId);
                 if (
                     rewardTarget &&
                     Number(rewardTarget.targetUserId) !== Number(reviewedComment.authorUserId)
                 ) {
-                    await createAndApprovePointEventSafe({
+                    const targetPointEvent = await createPointEventSafe({
                         userId: rewardTarget.targetUserId,
                         eventType: 'comment_received',
                         points: POINT_POLICY.rewards.commentReceived,
@@ -351,9 +322,12 @@ const reviewComment = async (req, res, next) => {
                             source: reviewedComment.parentCommentId ? 'comment_reply' : 'document_comment',
                             commentId,
                             fromUserId: reviewedComment.authorUserId,
+                            approvedByCommentReviewerUserId: req.user.userId,
                         },
-                        moderatorUserId: req.user.userId,
                     });
+                    if (targetPointEvent?.eventId) {
+                        pendingPointEventIds.push(Number(targetPointEvent.eventId));
+                    }
 
                     await notifyUserIfDifferent({
                         actorUserId: reviewedComment.authorUserId,
@@ -373,16 +347,55 @@ const reviewComment = async (req, res, next) => {
                             parentCommentId: reviewedComment.parentCommentId,
                         },
                     });
+
+                    await notifyModerators({
+                        type: 'comment_points_pending_review',
+                        title: 'Comment points pending review',
+                        message: `Comment #${commentId} generated point events pending moderation review.`,
+                        metadata: {
+                            documentId: reviewedComment.documentId,
+                            commentId,
+                            pointEventIds: pendingPointEventIds,
+                        },
+                    });
+                } else if (commenterPointEvent?.eventId) {
+                    await notifyModerators({
+                        type: 'comment_points_pending_review',
+                        title: 'Comment points pending review',
+                        message: `Comment #${commentId} generated point events pending moderation review.`,
+                        metadata: {
+                            documentId: reviewedComment.documentId,
+                            commentId,
+                            pointEventIds: pendingPointEventIds,
+                        },
+                    });
                 }
             }
         } catch (notifyError) {
             console.error('Failed to send comment review notifications:', notifyError.message);
         }
 
+        const pointReviewInfo =
+            decision === 'approved'
+                ? {
+                    pendingReview: true,
+                    pointEventIds: pendingPointEventIds,
+                }
+                : {
+                    pendingReview: false,
+                    pointEventIds: [],
+                };
+
         res.json({
             success: true,
-            message: 'Comment reviewed successfully.',
-            data: reviewedComment,
+            message:
+                decision === 'approved'
+                    ? 'Comment approved successfully. Point rewards are pending moderator review.'
+                    : 'Comment rejected successfully.',
+            data: {
+                ...reviewedComment,
+                pointReview: pointReviewInfo,
+            },
         });
     } catch (error) {
         next(error);

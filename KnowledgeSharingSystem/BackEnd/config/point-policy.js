@@ -14,6 +14,8 @@ const POINT_POLICY = {
         uploadApproved: 30,
         commentGiven: 2,
         commentReceived: 3,
+        upvoteReceived: 1,
+        documentSavedByOther: 1,
     },
     commentAntiSpam: {
         windowSeconds: 30,

@@ -56,6 +56,40 @@ const markNotificationAsRead = async (req, res, next) => {
     }
 };
 
+const markAllNotificationsAsRead = async (req, res, next) => {
+    try {
+        const affectedRows = await notificationModel.markAllNotificationsAsRead({
+            userId: req.user.userId,
+        });
+
+        res.json({
+            success: true,
+            message: 'All notifications marked as read successfully.',
+            data: {
+                affectedRows,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getMyNotificationSummary = async (req, res, next) => {
+    try {
+        const summary = await notificationModel.getMyNotificationSummary({
+            userId: req.user.userId,
+        });
+
+        res.json({
+            success: true,
+            message: 'Notification summary fetched successfully.',
+            data: summary,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 const streamNotifications = async (req, res, next) => {
     try {
         const tokenFromQuery = req.query?.token ? String(req.query.token) : '';
@@ -115,5 +149,7 @@ const streamNotifications = async (req, res, next) => {
 module.exports = {
     getMyNotifications,
     markNotificationAsRead,
+    markAllNotificationsAsRead,
+    getMyNotificationSummary,
     streamNotifications,
 };

@@ -1,5 +1,10 @@
 const documentEngagementModel = require('../models/document-engagement.model');
-const { notifyUserIfDifferent } = require('../services/notification-dispatcher.service');
+const pointEventModel = require('../models/point-event.model');
+const { POINT_POLICY } = require('../config/point-policy');
+const {
+    notifyModerators,
+    notifyUserIfDifferent,
+} = require('../services/notification-dispatcher.service');
 const actorLabel = (user) => user?.name || user?.username || 'A user';
 
 const validateDocumentId = (id) => {
@@ -66,7 +71,11 @@ const updateReaction = async (req, res, next) => {
             throw error;
         }
 
-        await ensureDocumentCanInteract(documentId);
+        const document = await ensureDocumentCanInteract(documentId);
+        const previousEngagement = await documentEngagementModel.getDocumentEngagement({
+            documentId,
+            userId: req.user.userId,
+        });
 
         const normalizedReactionType =
             reactionType === '' || reactionType === undefined ? null : reactionType;
@@ -92,6 +101,38 @@ const updateReaction = async (req, res, next) => {
                         reactionType: normalizedReactionType,
                     },
                 });
+
+                if (
+                    normalizedReactionType === 'like' &&
+                    previousEngagement.currentReaction !== 'like' &&
+                    Number(document.ownerUserId) !== Number(req.user.userId)
+                ) {
+                    const pointEvent = await pointEventModel.createPointEvent({
+                        userId: document.ownerUserId,
+                        eventType: 'upvote_received',
+                        points: Number(POINT_POLICY.rewards.upvoteReceived || 0),
+                        documentId,
+                        metadata: {
+                            documentId,
+                            reactorUserId: req.user.userId,
+                            source: 'document_like',
+                        },
+                    });
+
+                    if (pointEvent?.eventId) {
+                        await notifyModerators({
+                            type: 'point_event_pending_review',
+                            title: 'Point event pending review',
+                            message: `Document like created a pending point event (eventId=${pointEvent.eventId}).`,
+                            metadata: {
+                                eventId: pointEvent.eventId,
+                                eventType: 'upvote_received',
+                                documentId,
+                                userId: document.ownerUserId,
+                            },
+                        });
+                    }
+                }
             }
         } catch (notifyError) {
             console.error('Failed to create reaction notification:', notifyError.message);
@@ -128,7 +169,11 @@ const updateSavedState = async (req, res, next) => {
             throw error;
         }
 
-        await ensureDocumentCanInteract(documentId);
+        const document = await ensureDocumentCanInteract(documentId);
+        const previousEngagement = await documentEngagementModel.getDocumentEngagement({
+            documentId,
+            userId: req.user.userId,
+        });
 
         await documentEngagementModel.setSavedDocument({
             documentId,
@@ -140,6 +185,54 @@ const updateSavedState = async (req, res, next) => {
             documentId,
             userId: req.user.userId,
         });
+
+        if (
+            isSaved === true &&
+            previousEngagement.isSaved === false &&
+            Number(document.ownerUserId) !== Number(req.user.userId)
+        ) {
+            try {
+                const pointEvent = await pointEventModel.createPointEvent({
+                    userId: document.ownerUserId,
+                    eventType: 'document_saved_by_other',
+                    points: Number(POINT_POLICY.rewards.documentSavedByOther || 0),
+                    documentId,
+                    metadata: {
+                        documentId,
+                        saverUserId: req.user.userId,
+                        source: 'document_save',
+                    },
+                });
+
+                await notifyUserIfDifferent({
+                    actorUserId: req.user.userId,
+                    receiverUserId: document.ownerUserId,
+                    type: 'document_saved',
+                    title: 'Your document was saved',
+                    message: `${actorLabel(req.user)} saved your document "${document.title}".`,
+                    metadata: {
+                        documentId,
+                        saverUserId: req.user.userId,
+                    },
+                });
+
+                if (pointEvent?.eventId) {
+                    await notifyModerators({
+                        type: 'point_event_pending_review',
+                        title: 'Point event pending review',
+                        message: `Document save created a pending point event (eventId=${pointEvent.eventId}).`,
+                        metadata: {
+                            eventId: pointEvent.eventId,
+                            eventType: 'document_saved_by_other',
+                            documentId,
+                            userId: document.ownerUserId,
+                        },
+                    });
+                }
+            } catch (notifyError) {
+                console.error('Failed to create save notification/point event:', notifyError.message);
+            }
+        }
 
         res.json({
             success: true,
