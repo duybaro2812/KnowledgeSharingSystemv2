@@ -1,5 +1,7 @@
 const { Readable } = require('stream');
 const fs = require('fs/promises');
+const http = require('http');
+const https = require('https');
 const path = require('path');
 const { v2: cloudinary } = require('cloudinary');
 
@@ -138,9 +140,86 @@ const deleteLocalUploadedFileByUrl = async (fileUrl) => {
     }
 };
 
+const downloadRemoteFileBuffer = (fileUrl) =>
+    new Promise((resolve, reject) => {
+        let parsedUrl;
+
+        try {
+            parsedUrl = new URL(fileUrl);
+        } catch (error) {
+            reject(new Error('Invalid remote file URL.'));
+            return;
+        }
+
+        const client = parsedUrl.protocol === 'https:' ? https : http;
+
+        const request = client.get(parsedUrl, (response) => {
+            if (
+                response.statusCode &&
+                response.statusCode >= 300 &&
+                response.statusCode < 400 &&
+                response.headers.location
+            ) {
+                downloadRemoteFileBuffer(response.headers.location).then(resolve).catch(reject);
+                response.resume();
+                return;
+            }
+
+            if (response.statusCode !== 200) {
+                reject(
+                    new Error(`Failed to download remote file. HTTP status ${response.statusCode}.`)
+                );
+                response.resume();
+                return;
+            }
+
+            const chunks = [];
+
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => resolve(Buffer.concat(chunks)));
+            response.on('error', reject);
+        });
+
+        request.on('error', reject);
+    });
+
+const readLocalUploadedFileBuffer = async (fileUrl) => {
+    if (typeof fileUrl !== 'string' || !fileUrl.startsWith('/uploads/')) {
+        throw new Error('Unsupported local upload URL.');
+    }
+
+    const backendRoot = path.resolve(__dirname, '..');
+    const uploadsRoot = path.resolve(backendRoot, process.env.UPLOAD_DIR || 'uploads');
+    const relativeUrlPath = fileUrl.replace(/^\/+/, '');
+    const targetFilePath = path.resolve(backendRoot, relativeUrlPath);
+
+    if (!targetFilePath.startsWith(uploadsRoot)) {
+        throw new Error('Refusing to read file outside upload directory.');
+    }
+
+    return fs.readFile(targetFilePath);
+};
+
+const downloadStoredDocumentBuffer = async (fileUrl) => {
+    if (typeof fileUrl !== 'string' || !fileUrl.trim()) {
+        throw new Error('fileUrl is required to download stored document.');
+    }
+
+    if (fileUrl.startsWith('/uploads/')) {
+        return readLocalUploadedFileBuffer(fileUrl);
+    }
+
+    if (/^https?:\/\//i.test(fileUrl)) {
+        return downloadRemoteFileBuffer(fileUrl);
+    }
+
+    throw new Error('Unsupported fileUrl format for stored document download.');
+};
+
 module.exports = {
     uploadDocumentBuffer,
     isCloudinaryAssetUrl,
     deleteCloudinaryRawByUrl,
     deleteLocalUploadedFileByUrl,
+    downloadStoredDocumentBuffer,
 };

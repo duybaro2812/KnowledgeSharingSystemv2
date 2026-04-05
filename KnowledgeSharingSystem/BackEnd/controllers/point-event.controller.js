@@ -1,5 +1,7 @@
 const pointEventModel = require('../models/point-event.model');
 const notificationModel = require('../models/notification.model');
+const { VALIDATION_RULES } = require('../config/validation-rules');
+const { normalizeRequiredText, normalizeOptionalText } = require('../utils/input-sanitizer');
 
 const getPendingPointEvents = async (req, res, next) => {
     try {
@@ -18,7 +20,17 @@ const getPendingPointEvents = async (req, res, next) => {
 const reviewPointEvent = async (req, res, next) => {
     try {
         const eventId = Number(req.params.eventId);
-        const { decision, note, pointDelta } = req.body;
+        const decision = normalizeRequiredText({
+            value: req.body?.decision,
+            fieldName: 'decision',
+            maxLength: 20,
+        }).toLowerCase();
+        const note = normalizeOptionalText({
+            value: req.body?.note,
+            fieldName: 'note',
+            maxLength: VALIDATION_RULES.document.moderationNoteMax,
+        });
+        const { pointDelta } = req.body || {};
 
         if (!Number.isInteger(eventId) || eventId <= 0) {
             const error = new Error('A valid point event id is required.');
@@ -70,6 +82,12 @@ const reviewPointEvent = async (req, res, next) => {
                     decision,
                     note: note || null,
                     userPointsAfter: reviewed.userPointsAfter,
+                    action: decision === 'approved' ? 'point.approved' : 'point.rejected',
+                    target: {
+                        type: 'point_event',
+                        id: reviewed.eventId,
+                    },
+                    route: '/points',
                 },
             });
         } catch (notifyError) {

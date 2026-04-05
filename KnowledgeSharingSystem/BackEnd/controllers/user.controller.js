@@ -1,6 +1,13 @@
 const bcrypt = require('bcrypt');
 const userModel = require('../models/user.model');
 const adminActionLogModel = require('../models/admin-action-log.model');
+const notificationModel = require('../models/notification.model');
+const { VALIDATION_RULES } = require('../config/validation-rules');
+const {
+    normalizeRequiredText,
+    normalizeOptionalText,
+    normalizePassword,
+} = require('../utils/input-sanitizer');
 
 const setUserActiveStatus = async (req, res, next) => {
     try {
@@ -19,7 +26,25 @@ const setUserActiveStatus = async (req, res, next) => {
             throw error;
         }
 
+        if (Number(req.user?.userId) === userId) {
+            const error = new Error('Admin cannot lock or unlock their own account.');
+            error.statusCode = 400;
+            throw error;
+        }
+
         const beforeProfile = await userModel.getUserProfileById(userId);
+
+        if (!beforeProfile) {
+            const error = new Error('User not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (beforeProfile.role === 'admin') {
+            const error = new Error('Admin accounts cannot be locked or unlocked by this endpoint.');
+            error.statusCode = 400;
+            throw error;
+        }
 
         await userModel.setUserActiveStatus({
             userId,
@@ -43,6 +68,26 @@ const setUserActiveStatus = async (req, res, next) => {
                 },
                 note: isActive ? 'Admin unlocked user account.' : 'Admin locked user account.',
             });
+        }
+
+        try {
+            await notificationModel.createNotification({
+                userId,
+                type: isActive ? 'account_unlocked' : 'account_locked',
+                title: isActive ? 'Account unlocked' : 'Account locked',
+                message: isActive
+                    ? 'Your account has been unlocked by admin.'
+                    : 'Your account has been locked by admin.',
+                metadata: {
+                    target: { type: 'user', id: userId },
+                    action: isActive ? 'user.unlocked' : 'user.locked',
+                    sourceUserId: req.user.userId,
+                    adminUserId: req.user.userId,
+                    isActive,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create account status notification:', notifyError.message);
         }
 
         res.json({
@@ -74,7 +119,11 @@ const getUsers = async (req, res, next) => {
 const updateUserRole = async (req, res, next) => {
     try {
         const userId = Number(req.params.id);
-        const { role } = req.body;
+        const role = normalizeRequiredText({
+            value: req.body?.role,
+            fieldName: 'Role',
+            maxLength: 20,
+        }).toLowerCase();
 
         if (!Number.isInteger(userId) || userId <= 0) {
             const error = new Error('A valid user id is required.');
@@ -89,6 +138,18 @@ const updateUserRole = async (req, res, next) => {
         }
 
         const beforeProfile = await userModel.getUserProfileById(userId);
+
+        if (!beforeProfile) {
+            const error = new Error('User not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (beforeProfile.role === 'admin') {
+            const error = new Error('Admin role cannot be changed.');
+            error.statusCode = 400;
+            throw error;
+        }
 
         const affectedRows = await userModel.updateUserRole({
             userId,
@@ -120,6 +181,27 @@ const updateUserRole = async (req, res, next) => {
             });
         }
 
+        try {
+            await notificationModel.createNotification({
+                userId,
+                type: role === 'moderator' ? 'role_promoted_moderator' : 'role_changed_user',
+                title: role === 'moderator' ? 'Role updated to moderator' : 'Role changed to user',
+                message:
+                    role === 'moderator'
+                        ? 'Your account has been promoted to moderator by admin.'
+                        : 'Your account role has been changed to user by admin.',
+                metadata: {
+                    target: { type: 'user', id: userId },
+                    action: role === 'moderator' ? 'user.promoted_moderator' : 'user.demoted_user',
+                    sourceUserId: req.user.userId,
+                    adminUserId: req.user.userId,
+                    role,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create role update notification:', notifyError.message);
+        }
+
         res.json({
             success: true,
             message:
@@ -135,13 +217,12 @@ const updateUserRole = async (req, res, next) => {
 
 const updateMyProfile = async (req, res, next) => {
     try {
-        const { name, username } = req.body;
-
-        if (!name) {
-            const error = new Error('Name is required.');
-            error.statusCode = 400;
-            throw error;
-        }
+        const { username } = req.body || {};
+        const name = normalizeRequiredText({
+            value: req.body?.name,
+            fieldName: 'Name',
+            maxLength: VALIDATION_RULES.user.nameMax,
+        });
 
         if (typeof username !== 'undefined') {
             const error = new Error('Username cannot be changed.');
@@ -168,19 +249,18 @@ const updateMyProfile = async (req, res, next) => {
 
 const changeMyPassword = async (req, res, next) => {
     try {
-        const { currentPassword, newPassword } = req.body;
-
-        if (!currentPassword || !newPassword) {
-            const error = new Error('Current password and new password are required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (newPassword.length < 6) {
-            const error = new Error('New password must be at least 6 characters long.');
-            error.statusCode = 400;
-            throw error;
-        }
+        const currentPassword = normalizePassword({
+            value: req.body?.currentPassword,
+            minLength: VALIDATION_RULES.auth.passwordMin,
+            maxLength: VALIDATION_RULES.auth.passwordMax,
+            fieldName: 'currentPassword',
+        });
+        const newPassword = normalizePassword({
+            value: req.body?.newPassword,
+            minLength: VALIDATION_RULES.auth.passwordMin,
+            maxLength: VALIDATION_RULES.auth.passwordMax,
+            fieldName: 'newPassword',
+        });
 
         const user = await userModel.getUserAuthById(req.user.userId);
 
@@ -207,6 +287,10 @@ const changeMyPassword = async (req, res, next) => {
         res.json({
             success: true,
             message: 'Password changed successfully.',
+            data: {
+                userId: req.user.userId,
+                passwordChanged: true,
+            },
         });
     } catch (error) {
         next(error);
@@ -230,6 +314,18 @@ const deleteUserAccount = async (req, res, next) => {
         }
 
         const beforeProfile = await userModel.getUserProfileById(userId);
+
+        if (!beforeProfile) {
+            const error = new Error('User not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (beforeProfile.role === 'admin') {
+            const error = new Error('Admin account cannot be deleted.');
+            error.statusCode = 400;
+            throw error;
+        }
 
         const affectedRows = await userModel.softDeleteUserByAdmin({ userId });
 
@@ -262,6 +358,23 @@ const deleteUserAccount = async (req, res, next) => {
                 },
                 note: 'Admin performed soft delete user action.',
             });
+        }
+
+        try {
+            await notificationModel.createNotification({
+                userId,
+                type: 'account_soft_deleted',
+                title: 'Account deactivated by admin',
+                message: 'Your account has been deactivated by admin.',
+                metadata: {
+                    target: { type: 'user', id: userId },
+                    action: 'user.soft_deleted',
+                    sourceUserId: req.user.userId,
+                    adminUserId: req.user.userId,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create soft delete notification:', notifyError.message);
         }
 
         res.json({

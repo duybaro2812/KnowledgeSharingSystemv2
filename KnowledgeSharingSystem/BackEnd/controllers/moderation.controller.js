@@ -2,6 +2,8 @@ const commentModel = require('../models/comment.model');
 const reportModel = require('../models/report.model');
 const pointEventModel = require('../models/point-event.model');
 const moderationModel = require('../models/moderation.model');
+const documentModel = require('../models/document.model');
+const { REPORT_QUEUE_STATUSES } = require('../config/workflow-statuses');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -27,6 +29,7 @@ const toNonNegativeInt = (value, fallback) => {
 const parseInclude = (rawInclude) => {
     if (!rawInclude || !String(rawInclude).trim()) {
         return {
+            documents: true,
             comments: true,
             reports: true,
             points: true,
@@ -41,6 +44,7 @@ const parseInclude = (rawInclude) => {
     );
 
     return {
+        documents: includeSet.has('documents'),
         comments: includeSet.has('comments'),
         reports: includeSet.has('reports'),
         points: includeSet.has('points'),
@@ -53,7 +57,10 @@ const getModerationQueue = async (req, res, next) => {
         const limitInput = toPositiveInt(req.query.limit, DEFAULT_LIMIT);
         const offsetInput = toNonNegativeInt(req.query.offset, 0);
         const documentIdInput = toPositiveInt(req.query.documentId, null);
-        const reportStatus = req.query.reportStatus ? String(req.query.reportStatus).trim().toLowerCase() : 'open';
+        const reportStatus = req.query.reportStatus
+            ? String(req.query.reportStatus).trim().toLowerCase()
+            : REPORT_QUEUE_STATUSES.OPEN;
+        const allowedReportStatuses = Object.values(REPORT_QUEUE_STATUSES);
 
         if (limitInput === null) {
             const error = new Error('limit must be a positive integer.');
@@ -73,10 +80,28 @@ const getModerationQueue = async (req, res, next) => {
             throw error;
         }
 
+        if (!allowedReportStatuses.includes(reportStatus)) {
+            const error = new Error(
+                `reportStatus must be one of '${allowedReportStatuses.join("', '")}'.`
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
         const limit = Math.min(limitInput, MAX_LIMIT);
         const offset = offsetInput;
 
-        const [comments, reports, pointEvents] = await Promise.all([
+        const [documents, comments, reports, pointEvents] = await Promise.all([
+            include.documents
+                ? documentModel
+                    .getPendingDocuments()
+                    .then((items) =>
+                        documentIdInput
+                            ? items.filter((item) => Number(item.documentId) === Number(documentIdInput))
+                            : items
+                    )
+                    .then((items) => items.slice(offset, offset + limit))
+                : Promise.resolve([]),
             include.comments
                 ? commentModel.getPendingCommentsForModeration({
                     limit,
@@ -99,10 +124,12 @@ const getModerationQueue = async (req, res, next) => {
         ]);
 
         const summary = {
+            documentsPending: include.documents ? documents.length : null,
             commentsPending: include.comments ? comments.length : null,
             reportsPending: include.reports ? reports.length : null,
             pointEventsPending: include.points ? pointEvents.length : null,
             totalPending:
+                (include.documents ? documents.length : 0) +
                 (include.comments ? comments.length : 0) +
                 (include.reports ? reports.length : 0) +
                 (include.points ? pointEvents.length : 0),
@@ -114,6 +141,7 @@ const getModerationQueue = async (req, res, next) => {
             data: {
                 summary,
                 queue: {
+                    documents,
                     comments,
                     reports,
                     pointEvents,
@@ -205,12 +233,17 @@ const getModerationTimeline = async (req, res, next) => {
 
         if (
             source &&
-            !['admin_action', 'document_action', 'report_review', 'comment_review', 'point_review'].includes(
-                source
-            )
+            ![
+                'admin_action',
+                'document_action',
+                'plagiarism_review',
+                'report_review',
+                'comment_review',
+                'point_review',
+            ].includes(source)
         ) {
             const error = new Error(
-                "source must be one of: admin_action, document_action, report_review, comment_review, point_review."
+                'source must be one of: admin_action, document_action, plagiarism_review, report_review, comment_review, point_review.'
             );
             error.statusCode = 400;
             throw error;

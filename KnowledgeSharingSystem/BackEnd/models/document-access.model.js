@@ -1,6 +1,29 @@
 const { getPool, sql } = require('../utils/db');
 const { POINT_POLICY } = require('../config/point-policy');
 
+const buildDownloadConfirmation = ({ title, downloadCost, points }) => {
+    if (!downloadCost || downloadCost <= 0) {
+        return null;
+    }
+
+    return {
+        title: 'Xác nhận tải tài liệu',
+        message: `Xác nhận mất ${downloadCost} điểm để download tài liệu "${title}"?`,
+        pointsBefore: points,
+        pointsCost: downloadCost,
+        pointsAfterIfConfirmed: Math.max(0, Number(points || 0) - Number(downloadCost || 0)),
+    };
+};
+
+const buildLockedPreviewOverlay = ({ points, requiredPoints }) => ({
+    title: 'This document is locked',
+    message: `You need at least ${requiredPoints} points to unlock this document.`,
+    helperText: 'Earn more points to view, comment, discuss, and ask questions about this document.',
+    currentPoints: points,
+    requiredPoints,
+    shortfallPoints: Math.max(0, Number(requiredPoints || 0) - Number(points || 0)),
+});
+
 const getDocumentForAccess = async (documentId) => {
     const pool = getPool();
 
@@ -175,13 +198,20 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
     if (isPrivileged || isOwner) {
         return {
             points: await getUserPoints(userId),
+            accessState: 'privileged',
+            isLocked: false,
             canPreview: true,
             canFullView: true,
             canDownload: true,
+            canComment: true,
+            canDiscuss: true,
+            canAskQuestion: true,
             dailyViewLimit: null,
             todayFullViewCount: 0,
             viewsRemainingToday: null,
             downloadCost: 0,
+            downloadConfirmation: null,
+            lockedOverlay: null,
             tier: 'privileged',
             reason: 'Owner/admin/moderator bypass',
         };
@@ -193,15 +223,25 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
     if (points < POINT_POLICY.unlock.previewThreshold) {
         return {
             points,
+            accessState: 'locked_points',
+            isLocked: true,
             canPreview: true,
             canFullView: false,
             canDownload: false,
+            canComment: true,
+            canDiscuss: true,
+            canAskQuestion: true,
             dailyViewLimit: 0,
             todayFullViewCount,
             viewsRemainingToday: 0,
             downloadCost: null,
-            tier: 'preview_only',
-            reason: `Need at least ${POINT_POLICY.unlock.previewThreshold} points to unlock full view.`,
+            downloadConfirmation: null,
+            lockedOverlay: buildLockedPreviewOverlay({
+                points,
+                requiredPoints: POINT_POLICY.unlock.previewThreshold,
+            }),
+            tier: 'locked',
+            reason: `Need at least ${POINT_POLICY.unlock.previewThreshold} points to unlock this document.`,
         };
     }
 
@@ -211,13 +251,20 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
 
         return {
             points,
+            accessState: 'limited_full',
+            isLocked: false,
             canPreview: true,
             canFullView: viewsRemainingToday > 0,
             canDownload: false,
+            canComment: true,
+            canDiscuss: true,
+            canAskQuestion: true,
             dailyViewLimit: viewLimit,
             todayFullViewCount,
             viewsRemainingToday,
             downloadCost: null,
+            downloadConfirmation: null,
+            lockedOverlay: null,
             tier: 'view_limited',
             reason:
                 viewsRemainingToday > 0
@@ -233,13 +280,24 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
 
     return {
         points,
+        accessState: 'full_access',
+        isLocked: false,
         canPreview: true,
         canFullView: true,
         canDownload: points >= downloadCost,
+        canComment: true,
+        canDiscuss: true,
+        canAskQuestion: true,
         dailyViewLimit: null,
         todayFullViewCount,
         viewsRemainingToday: null,
         downloadCost,
+        downloadConfirmation: buildDownloadConfirmation({
+            title: document.title,
+            downloadCost,
+            points,
+        }),
+        lockedOverlay: null,
         tier: points >= POINT_POLICY.download.priorityThreshold ? 'priority' : 'standard',
         reason: points >= downloadCost ? null : 'Insufficient points for download.',
     };

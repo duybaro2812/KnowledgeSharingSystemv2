@@ -5,17 +5,67 @@ const notificationModel = require('../models/notification.model');
 const userModel = require('../models/user.model');
 const pointEventModel = require('../models/point-event.model');
 const documentPlagiarismModel = require('../models/document-plagiarism.model');
+const documentPlagiarismReviewModel = require('../models/document-plagiarism-review.model');
 const { POINT_POLICY } = require('../config/point-policy');
+const { DOCUMENT_STATUSES } = require('../config/workflow-statuses');
+const { VALIDATION_RULES } = require('../config/validation-rules');
+const {
+    normalizeRequiredText,
+    normalizeOptionalText,
+} = require('../utils/input-sanitizer');
 const {
     uploadDocumentBuffer,
     isCloudinaryAssetUrl,
     deleteCloudinaryRawByUrl,
     deleteLocalUploadedFileByUrl,
+    downloadStoredDocumentBuffer,
 } = require('../services/cloudinary.service');
 const { buildPlagiarismAssessment } = require('../services/plagiarism.service');
 const { extractTextFromDocument } = require('../services/document-text-extraction.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+
+const normalizeDocumentTitle = (value) =>
+    normalizeRequiredText({
+        value,
+        fieldName: 'Title',
+        maxLength: VALIDATION_RULES.document.titleMax,
+    });
+
+const normalizeDocumentDescription = (value) =>
+    normalizeOptionalText({
+        value,
+        fieldName: 'Description',
+        maxLength: VALIDATION_RULES.document.descriptionMax,
+    });
+
+const normalizeModerationNote = (value, fieldName = 'note') =>
+    normalizeOptionalText({
+        value,
+        fieldName,
+        maxLength: VALIDATION_RULES.document.moderationNoteMax,
+    });
+
+const normalizeReportReason = (value) =>
+    normalizeRequiredText({
+        value,
+        fieldName: 'Report reason',
+        maxLength: VALIDATION_RULES.document.reportReasonMax,
+    });
+
+const normalizeLockReason = (value) =>
+    normalizeRequiredText({
+        value,
+        fieldName: 'Lock reason',
+        maxLength: VALIDATION_RULES.document.lockReasonMax,
+    });
+
+const normalizePenaltyNote = (value) =>
+    normalizeOptionalText({
+        value,
+        fieldName: 'Penalty note',
+        maxLength: VALIDATION_RULES.document.penaltyNoteMax,
+    });
 
 const deleteStoredDocumentFile = async (fileUrl) => {
     if (isCloudinaryAssetUrl(fileUrl)) {
@@ -23,6 +73,34 @@ const deleteStoredDocumentFile = async (fileUrl) => {
     }
 
     return deleteLocalUploadedFileByUrl(fileUrl);
+};
+
+const buildAndStoreDocumentTextArtifact = async ({
+    documentId,
+    buffer,
+    originalFileName,
+    mimeType,
+    title,
+    description,
+}) => {
+    const extractedDocumentText = await extractTextFromDocument({
+        buffer,
+        originalFileName,
+        mimeType,
+        title,
+        description,
+    });
+
+    await documentPlagiarismModel.upsertDocumentTextArtifact({
+        documentId,
+        extractedText: extractedDocumentText.extractedText,
+        normalizedText: extractedDocumentText.normalizedText,
+        tokenCount: extractedDocumentText.tokenCount,
+        extractionMethod: extractedDocumentText.extractionMethod,
+        extractionWarning: extractedDocumentText.extractionWarning,
+    });
+
+    return extractedDocumentText;
 };
 
 const notifyModerationTeam = async ({ type, title, message, metadata = null }) => {
@@ -81,6 +159,205 @@ const checkDocumentPlagiarismInternal = async (documentId) => {
     });
 };
 
+const buildDocumentOwnerNotificationMetadata = ({
+    documentId,
+    action,
+    moderatorUserId = null,
+    note = null,
+    extra = {},
+}) => ({
+    documentId,
+    action,
+    moderatorUserId,
+    note,
+    target: {
+        type: 'document',
+        id: documentId,
+    },
+    route: `/documents/${documentId}`,
+    ...extra,
+});
+
+const buildModerationQueueNotificationMetadata = ({
+    documentId,
+    action,
+    note = null,
+    extra = {},
+}) => ({
+    documentId,
+    action,
+    note,
+    target: {
+        type: 'moderation_queue',
+        id: documentId,
+    },
+    route: `/moderation?documentId=${documentId}`,
+    ...extra,
+});
+
+const buildPlagiarismNotificationPayload = ({
+    documentId,
+    documentTitle,
+    plagiarismCheck,
+    extractionWarning = null,
+    source = 'upload',
+}) => {
+    const topCandidate = plagiarismCheck.topCandidates?.[0] || null;
+    const plagiarismPercent = Number(plagiarismCheck.maxPlagiarismPercent || 0);
+    const comparedDocumentId = topCandidate?.documentId || null;
+    const comparedDocumentTitle = topCandidate?.title || 'Unknown document';
+    const comparedDocumentRoute = comparedDocumentId ? `/documents/${comparedDocumentId}` : null;
+
+    return {
+        title: source === 'manual_recheck' ? 'Re-check dao van hoan tat' : 'Ket qua kiem tra dao van',
+        message: `Tai lieu co ${plagiarismPercent}% giong voi tai lieu: ${comparedDocumentTitle}.`,
+        metadata: buildModerationQueueNotificationMetadata({
+            documentId,
+            action: 'document.plagiarism_suspected',
+            note: extractionWarning || null,
+            extra: {
+                documentTitle,
+                comparedDocumentId,
+                comparedDocumentTitle,
+                comparedDocumentRoute,
+                plagiarismPercent,
+                thresholdPercent: plagiarismCheck.thresholdPercent,
+                aboveThreshold: Boolean(plagiarismCheck.aboveThreshold),
+                riskLevel: plagiarismCheck.riskLevel,
+                candidateCount: plagiarismCheck.candidateCount,
+                duplicateReasons: (plagiarismCheck.topCandidates || []).map(
+                    (item) => item.duplicateReason
+                ),
+                extractionWarning: extractionWarning || null,
+                source,
+                links: comparedDocumentRoute
+                    ? [
+                        {
+                            type: 'compared_document',
+                            label: comparedDocumentTitle,
+                            route: comparedDocumentRoute,
+                            documentId: comparedDocumentId,
+                        },
+                    ]
+                    : [],
+            },
+        }),
+    };
+};
+
+const applyDocumentReviewDecision = async ({
+    documentId,
+    moderatorUserId,
+    decision,
+    note = null,
+    approvalNotificationType = 'document_upload_success',
+    approvalNotificationTitle = 'Upload Success',
+    approvalNotificationMessage,
+    rejectionNotificationType = 'document_rejected',
+    rejectionNotificationTitle = 'Document was rejected',
+    rejectionNotificationMessage,
+}) => {
+    await documentModel.reviewDocument({
+        documentId,
+        moderatorUserId,
+        decision,
+        note: note || null,
+    });
+
+    try {
+        await documentModel.logDocumentModerationAction({
+            userId: moderatorUserId,
+            action:
+                decision === DOCUMENT_STATUSES.APPROVED
+                    ? 'review_document_approved'
+                    : 'review_document_rejected',
+            documentId,
+        });
+    } catch (logError) {
+        console.error('Failed to log document review action:', logError.message);
+    }
+
+    const updatedDocument = await documentModel.getDocumentDetailById(documentId);
+
+    const responseData = {
+        document: updatedDocument,
+        review: {
+            decision,
+            note: note || null,
+            moderatorUserId,
+        },
+    };
+
+    if (decision === DOCUMENT_STATUSES.REJECTED) {
+        try {
+            await notificationModel.createNotification({
+                userId: updatedDocument.ownerUserId,
+                type: rejectionNotificationType,
+                title: rejectionNotificationTitle,
+                message:
+                    rejectionNotificationMessage || 'Your document was rejected because it is invalid.',
+                metadata: {
+                    ...buildDocumentOwnerNotificationMetadata({
+                        documentId,
+                        action: 'document.rejected',
+                        moderatorUserId,
+                        note: note || null,
+                    }),
+                    decision,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to create reject notification:', notifyError.message);
+        }
+
+        responseData.userNotification = {
+            userId: updatedDocument.ownerUserId,
+            message: rejectionNotificationMessage || 'Your document was rejected because it is invalid.',
+        };
+
+        return responseData;
+    }
+
+    try {
+        await pointEventModel.createPointEvent({
+            userId: updatedDocument.ownerUserId,
+            eventType: pointEventModel.EVENT_TYPES.UPLOAD_APPROVED,
+            points: POINT_POLICY.rewards.uploadApproved,
+            documentId,
+            metadata: {
+                source: 'document_review',
+                moderatorUserId,
+            },
+        });
+    } catch (pointEventError) {
+        console.error('Failed to create upload_approved point event:', pointEventError.message);
+    }
+
+    try {
+        await notificationModel.createNotification({
+            userId: updatedDocument.ownerUserId,
+            type: approvalNotificationType,
+            title: approvalNotificationTitle,
+            message:
+                approvalNotificationMessage ||
+                `Your document "${updatedDocument.title}" has been approved by moderator.`,
+            metadata: {
+                ...buildDocumentOwnerNotificationMetadata({
+                    documentId,
+                    action: 'document.approved',
+                    moderatorUserId,
+                    note: note || null,
+                }),
+                decision,
+            },
+        });
+    } catch (notifyError) {
+        console.error('Failed to create approve notification:', notifyError.message);
+    }
+
+    return responseData;
+};
+
 const getDocuments = async (req, res, next) => {
     try {
         const { keyword, categoryId, categoryKeyword } = req.query;
@@ -132,13 +409,9 @@ const getDocumentDetail = async (req, res, next) => {
 
 const createDocument = async (req, res, next) => {
     try {
-        const { title, description, categoryIds } = req.body;
-
-        if (!title) {
-            const error = new Error('Title is required.');
-            error.statusCode = 400;
-            throw error;
-        }
+        const title = normalizeDocumentTitle(req.body?.title);
+        const description = normalizeDocumentDescription(req.body?.description);
+        const { categoryIds } = req.body || {};
 
         if (!req.file) {
             const error = new Error('A document file is required.');
@@ -168,7 +441,8 @@ const createDocument = async (req, res, next) => {
 
         const document = await documentModel.getDocumentDetailById(documentId);
 
-        const extractedDocumentText = await extractTextFromDocument({
+        const extractedDocumentText = await buildAndStoreDocumentTextArtifact({
+            documentId,
             buffer: req.file.buffer,
             originalFileName: req.file.originalname,
             mimeType: req.file.mimetype,
@@ -176,41 +450,23 @@ const createDocument = async (req, res, next) => {
             description,
         });
 
-        await documentPlagiarismModel.upsertDocumentTextArtifact({
-            documentId,
-            extractedText: extractedDocumentText.extractedText,
-            normalizedText: extractedDocumentText.normalizedText,
-            tokenCount: extractedDocumentText.tokenCount,
-            extractionMethod: extractedDocumentText.extractionMethod,
-            extractionWarning: extractedDocumentText.extractionWarning,
-        });
-
         const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
 
         if (plagiarismCheck.candidateCount > 0) {
-            const topCandidate = plagiarismCheck.topCandidates?.[0] || null;
-            const plagiarismPercent = Number(plagiarismCheck.maxPlagiarismPercent || 0);
-            const comparedDocumentTitle = topCandidate?.title || 'unknown document';
-
             try {
+                const plagiarismNotification = buildPlagiarismNotificationPayload({
+                    documentId,
+                    documentTitle: title,
+                    plagiarismCheck,
+                    extractionWarning: extractedDocumentText.extractionWarning || null,
+                    source: 'upload',
+                });
+
                 await notifyModerationTeam({
                     type: 'plagiarism_suspected',
-                    title: 'Kết quả kiểm tra đạo văn',
-                    message: `Tài liệu "${title}" có dấu hiệu đạo văn khoảng ${plagiarismPercent}% so với tài liệu "${comparedDocumentTitle}".`,
-                    metadata: {
-                        documentId,
-                        comparedDocumentId: topCandidate?.documentId || null,
-                        comparedDocumentTitle,
-                        plagiarismPercent,
-                        thresholdPercent: plagiarismCheck.thresholdPercent,
-                        aboveThreshold: Boolean(plagiarismCheck.aboveThreshold),
-                        riskLevel: plagiarismCheck.riskLevel,
-                        candidateCount: plagiarismCheck.candidateCount,
-                        duplicateReasons: (plagiarismCheck.topCandidates || []).map(
-                            (item) => item.duplicateReason
-                        ),
-                        extractionWarning: extractedDocumentText.extractionWarning || null,
-                    },
+                    title: plagiarismNotification.title,
+                    message: plagiarismNotification.message,
+                    metadata: plagiarismNotification.metadata,
                 });
             } catch (notifyError) {
                 console.error('Failed to notify moderation team for plagiarism check:', notifyError.message);
@@ -282,10 +538,9 @@ const checkDocumentPlagiarism = async (req, res, next) => {
     }
 };
 
-const updateDocument = async (req, res, next) => {
+const recheckDocumentPlagiarism = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { title, description, categoryIds } = req.body;
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -293,8 +548,76 @@ const updateDocument = async (req, res, next) => {
             throw error;
         }
 
-        if (!title) {
-            const error = new Error('Title is required.');
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const fileBuffer = await downloadStoredDocumentBuffer(document.fileUrl);
+        const extractedDocumentText = await buildAndStoreDocumentTextArtifact({
+            documentId,
+            buffer: fileBuffer,
+            originalFileName: document.originalFileName,
+            mimeType: document.mimeType,
+            title: document.title,
+            description: document.description,
+        });
+        const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
+
+        if (plagiarismCheck.candidateCount > 0) {
+            try {
+                const plagiarismNotification = buildPlagiarismNotificationPayload({
+                    documentId,
+                    documentTitle: document.title,
+                    plagiarismCheck,
+                    extractionWarning: extractedDocumentText.extractionWarning || null,
+                    source: 'manual_recheck',
+                });
+
+                await notifyModerationTeam({
+                    type: 'plagiarism_rechecked',
+                    title: plagiarismNotification.title,
+                    message: plagiarismNotification.message,
+                    metadata: plagiarismNotification.metadata,
+                });
+            } catch (notifyError) {
+                console.error(
+                    'Failed to notify moderation team for plagiarism re-check:',
+                    notifyError.message
+                );
+            }
+        }
+
+        res.json({
+            success: true,
+            message: 'Document plagiarism re-check completed successfully.',
+            data: {
+                documentId,
+                extraction: {
+                    method: extractedDocumentText.extractionMethod,
+                    tokenCount: extractedDocumentText.tokenCount,
+                    warning: extractedDocumentText.extractionWarning || null,
+                },
+                plagiarismCheck,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const updateDocument = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const title = normalizeDocumentTitle(req.body?.title);
+        const description = normalizeDocumentDescription(req.body?.description);
+        const { categoryIds } = req.body || {};
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
             error.statusCode = 400;
             throw error;
         }
@@ -327,21 +650,13 @@ const updateDocument = async (req, res, next) => {
             mimeType = req.file.mimetype;
             fileHash = getFileHashFromBuffer(req.file.buffer);
 
-            const extractedDocumentText = await extractTextFromDocument({
+            await buildAndStoreDocumentTextArtifact({
+                documentId,
                 buffer: req.file.buffer,
                 originalFileName: req.file.originalname,
                 mimeType: req.file.mimetype,
                 title,
                 description,
-            });
-
-            await documentPlagiarismModel.upsertDocumentTextArtifact({
-                documentId,
-                extractedText: extractedDocumentText.extractedText,
-                normalizedText: extractedDocumentText.normalizedText,
-                tokenCount: extractedDocumentText.tokenCount,
-                extractionMethod: extractedDocumentText.extractionMethod,
-                extractionWarning: extractedDocumentText.extractionWarning,
             });
         }
 
@@ -457,16 +772,10 @@ const getPendingDocuments = async (req, res, next) => {
 const createDocumentReport = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { reason } = req.body;
+        const reason = normalizeReportReason(req.body?.reason);
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (!reason || !String(reason).trim()) {
-            const error = new Error('Report reason is required.');
             error.statusCode = 400;
             throw error;
         }
@@ -493,7 +802,7 @@ const createDocumentReport = async (req, res, next) => {
             reportResult = await reportModel.createDocumentReport({
                 documentId,
                 reporterUserId: req.user.userId,
-                reason: String(reason).trim(),
+                reason,
             });
         } catch (error) {
             if (error.number === 56702 || error.number === 56703) {
@@ -506,14 +815,18 @@ const createDocumentReport = async (req, res, next) => {
             await notifyModerationTeam({
                 type: 'document_reported',
                 title: 'New document report',
-                message: `Document "${document.title}" received a new report and needs moderation review.`,
-                metadata: {
+              message: `Document "${document.title}" received a new report and needs moderation review.`,
+                metadata: buildModerationQueueNotificationMetadata({
                     documentId,
-                    reason: String(reason).trim(),
-                    uniqueReporterCount: reportResult.uniqueReporterCount,
-                    threshold: reportModel.REPORT_AUTO_LOCK_THRESHOLD,
-                    autoLocked: Boolean(reportResult.wasAutoLocked),
-                },
+                    action: 'document.reported',
+                    note: reason,
+                    extra: {
+                        reason,
+                        uniqueReporterCount: reportResult.uniqueReporterCount,
+                        threshold: reportModel.REPORT_AUTO_LOCK_THRESHOLD,
+                        autoLocked: Boolean(reportResult.wasAutoLocked),
+                    },
+                }),
             });
         } catch (notifyError) {
             console.error('Failed to notify moderation team for new report:', notifyError.message);
@@ -526,11 +839,15 @@ const createDocumentReport = async (req, res, next) => {
                     type: 'document_auto_locked',
                     title: 'Document locked due to reports',
                     message: `Your document "${document.title}" was auto-locked because it received more than ${reportModel.REPORT_AUTO_LOCK_THRESHOLD} reports.`,
-                    metadata: {
+                metadata: {
+                    ...buildDocumentOwnerNotificationMetadata({
                         documentId,
-                        uniqueReporterCount: reportResult.uniqueReporterCount,
-                    },
-                });
+                        action: 'document.auto_locked',
+                        note: `Auto locked after ${reportResult.uniqueReporterCount} reports.`,
+                    }),
+                    uniqueReporterCount: reportResult.uniqueReporterCount,
+                },
+            });
             } catch (notifyError) {
                 console.error('Failed to create auto-lock notification for owner:', notifyError.message);
             }
@@ -628,7 +945,13 @@ const getDocumentReportHistory = async (req, res, next) => {
 const resolveReportedDocument = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { action, note, penaltyPoints } = req.body;
+        const action = normalizeRequiredText({
+            value: req.body?.action,
+            fieldName: 'action',
+            maxLength: 20,
+        }).toLowerCase();
+        const note = normalizeModerationNote(req.body?.note);
+        const { penaltyPoints } = req.body || {};
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -671,7 +994,7 @@ const resolveReportedDocument = async (req, res, next) => {
         if (action === 'unlock') {
             await documentModel.updateDocumentStatus({
                 documentId,
-                status: 'approved',
+                status: DOCUMENT_STATUSES.APPROVED,
             });
 
             const resolvedReports = await reportModel.resolveOpenDocumentReports({
@@ -693,13 +1016,17 @@ const resolveReportedDocument = async (req, res, next) => {
                     type: 'document_unlocked',
                     title: 'Document restored',
                     message: `Your document "${document.title}" passed moderation review and is available again.`,
-                    metadata: {
+                metadata: {
+                    ...buildDocumentOwnerNotificationMetadata({
                         documentId,
-                        action,
+                        action: 'report.resolved_unlock',
+                        moderatorUserId: req.user.userId,
                         note: note || null,
-                        resolvedReports,
-                    },
-                });
+                    }),
+                    moderationAction: action,
+                    resolvedReports,
+                },
+            });
             } catch (notifyError) {
                 console.error('Failed to create unlock-after-report notification:', notifyError.message);
             }
@@ -713,9 +1040,13 @@ const resolveReportedDocument = async (req, res, next) => {
                             title: 'Report reviewed',
                             message: `Your report on "${document.title}" was reviewed. Document remains available.`,
                             metadata: {
-                                documentId,
-                                action,
-                                note: note || null,
+                                ...buildDocumentOwnerNotificationMetadata({
+                                    documentId,
+                                    action: 'report.resolved_unlock',
+                                    moderatorUserId: req.user.userId,
+                                    note: note || null,
+                                }),
+                                moderationAction: action,
                             },
                         })
                     )
@@ -800,14 +1131,18 @@ const resolveReportedDocument = async (req, res, next) => {
                         userId: reporterUserId,
                         type: 'report_resolved_deleted',
                         title: 'Report confirmed',
-                        message: `Your report on "${document.title}" was confirmed. The document has been removed.`,
-                        metadata: {
-                            documentId,
-                            action,
-                            note: note || null,
-                        },
-                    })
-                )
+                          message: `Your report on "${document.title}" was confirmed. The document has been removed.`,
+                          metadata: {
+                              ...buildDocumentOwnerNotificationMetadata({
+                                  documentId,
+                                  action: 'report.resolved_delete',
+                                  moderatorUserId: req.user.userId,
+                                  note: note || null,
+                              }),
+                              moderationAction: action,
+                          },
+                      })
+                  )
             );
         } catch (notifyError) {
             console.error(
@@ -839,7 +1174,12 @@ const resolveReportedDocument = async (req, res, next) => {
 const reviewDocument = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { decision, note } = req.body;
+        const decision = normalizeRequiredText({
+            value: req.body?.decision,
+            fieldName: 'decision',
+            maxLength: 20,
+        }).toLowerCase();
+        const note = normalizeModerationNote(req.body?.note);
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -847,13 +1187,15 @@ const reviewDocument = async (req, res, next) => {
             throw error;
         }
 
-        if (!['approved', 'rejected'].includes(decision)) {
-            const error = new Error("decision must be either 'approved' or 'rejected'.");
+        if (![DOCUMENT_STATUSES.APPROVED, DOCUMENT_STATUSES.REJECTED].includes(decision)) {
+            const error = new Error(
+                `decision must be either '${DOCUMENT_STATUSES.APPROVED}' or '${DOCUMENT_STATUSES.REJECTED}'.`
+            );
             error.statusCode = 400;
             throw error;
         }
 
-        if (decision === 'rejected' && (!note || !String(note).trim())) {
+        if (decision === DOCUMENT_STATUSES.REJECTED && !note) {
             const error = new Error('A rejection note is required when decision is rejected.');
             error.statusCode = 400;
             throw error;
@@ -867,77 +1209,12 @@ const reviewDocument = async (req, res, next) => {
             throw error;
         }
 
-        await documentModel.reviewDocument({
+        const responseData = await applyDocumentReviewDecision({
             documentId,
             moderatorUserId: req.user.userId,
             decision,
             note: note || null,
         });
-
-        const updatedDocument = await documentModel.getDocumentDetailById(documentId);
-
-        const responseData = {
-            document: updatedDocument,
-            review: {
-                decision,
-                note: note || null,
-                moderatorUserId: req.user.userId,
-            },
-        };
-
-        if (decision === 'rejected') {
-            try {
-                await notificationModel.createNotification({
-                    userId: updatedDocument.ownerUserId,
-                    type: 'document_rejected',
-                    title: 'Document was rejected',
-                    message: 'Your document was rejected because it is invalid.',
-                    metadata: {
-                        documentId,
-                        decision,
-                        note: note || null,
-                    },
-                });
-            } catch (notifyError) {
-                console.error('Failed to create reject notification:', notifyError.message);
-            }
-
-            responseData.userNotification = {
-                userId: updatedDocument.ownerUserId,
-                message: 'Your document was rejected because it is invalid.',
-            };
-        } else {
-            try {
-                await pointEventModel.createPointEvent({
-                    userId: updatedDocument.ownerUserId,
-                    eventType: pointEventModel.EVENT_TYPES.UPLOAD_APPROVED,
-                    points: POINT_POLICY.rewards.uploadApproved,
-                    documentId,
-                    metadata: {
-                        source: 'document_review',
-                        moderatorUserId: req.user.userId,
-                    },
-                });
-            } catch (pointEventError) {
-                console.error('Failed to create upload_approved point event:', pointEventError.message);
-            }
-
-            try {
-                await notificationModel.createNotification({
-                    userId: updatedDocument.ownerUserId,
-                    type: 'document_upload_success',
-                    title: 'Upload Success',
-                    message: `Your document "${updatedDocument.title}" has been approved by moderator.`,
-                    metadata: {
-                        documentId,
-                        decision,
-                        note: note || null,
-                    },
-                });
-            } catch (notifyError) {
-                console.error('Failed to create approve notification:', notifyError.message);
-            }
-        }
 
         res.json({
             success: true,
@@ -952,10 +1229,15 @@ const reviewDocument = async (req, res, next) => {
     }
 };
 
-const lockDocument = async (req, res, next) => {
+const resolveDocumentPlagiarism = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { reason } = req.body;
+        const action = normalizeRequiredText({
+            value: req.body?.action,
+            fieldName: 'action',
+            maxLength: 30,
+        }).toLowerCase();
+        const note = normalizeModerationNote(req.body?.note);
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -963,8 +1245,16 @@ const lockDocument = async (req, res, next) => {
             throw error;
         }
 
-        if (!reason || !String(reason).trim()) {
-            const error = new Error('A lock reason is required.');
+        if (!['approve_anyway', 'reject_duplicate'].includes(action)) {
+            const error = new Error(
+                "action must be either 'approve_anyway' or 'reject_duplicate'."
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (action === 'reject_duplicate' && !note) {
+            const error = new Error('A rejection note is required when action is reject_duplicate.');
             error.statusCode = 400;
             throw error;
         }
@@ -977,7 +1267,118 @@ const lockDocument = async (req, res, next) => {
             throw error;
         }
 
-        if (document.status === 'hidden') {
+        if (document.status !== DOCUMENT_STATUSES.PENDING) {
+            const error = new Error(
+                'Only pending documents can be resolved through plagiarism moderation.'
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
+
+        if (!plagiarismCheck.candidateCount) {
+            const error = new Error(
+                'No plagiarism candidates found for this document. Run CheckDuplicate again if needed.'
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const topCandidate = plagiarismCheck.topCandidates?.[0] || null;
+
+        const plagiarismReview = await documentPlagiarismReviewModel.createPlagiarismReview({
+            documentId,
+            reviewedByUserId: req.user.userId,
+            decision: action === 'approve_anyway' ? 'approved_anyway' : 'rejected_duplicate',
+            comparedDocumentId: topCandidate?.documentId || null,
+            plagiarismPercent: Number(plagiarismCheck.maxPlagiarismPercent || 0),
+            note: note || null,
+            snapshotMetadata: plagiarismCheck,
+        });
+
+        try {
+            await documentModel.logDocumentModerationAction({
+                userId: req.user.userId,
+                action:
+                    action === 'approve_anyway'
+                        ? 'plagiarism_approved_anyway'
+                        : 'plagiarism_rejected_duplicate',
+                documentId,
+            });
+        } catch (logError) {
+            console.error('Failed to log plagiarism resolution action:', logError.message);
+        }
+
+        const reviewDecision =
+            action === 'approve_anyway' ? DOCUMENT_STATUSES.APPROVED : DOCUMENT_STATUSES.REJECTED;
+        const defaultRejectionNote = `Rejected after duplicate check (${Number(
+            plagiarismCheck.maxPlagiarismPercent || 0
+        )}% similarity suspected).`;
+        const reviewOutcome = await applyDocumentReviewDecision({
+            documentId,
+            moderatorUserId: req.user.userId,
+            decision: reviewDecision,
+            note:
+                note ||
+                (reviewDecision === DOCUMENT_STATUSES.REJECTED ? defaultRejectionNote : null),
+            approvalNotificationType: 'plagiarism_approved_anyway',
+            approvalNotificationTitle: 'Document approved after duplicate check',
+            approvalNotificationMessage: `Your document "${document.title}" was still approved after moderator reviewed the duplicate-check result.`,
+            rejectionNotificationType: 'plagiarism_rejected_duplicate',
+            rejectionNotificationTitle: 'Document rejected due to duplicate suspicion',
+            rejectionNotificationMessage: `Your document "${document.title}" was rejected after moderator confirmed duplicate/plagiarism suspicion.`,
+        });
+
+        res.json({
+            success: true,
+            message:
+                action === 'approve_anyway'
+                    ? 'Document approved after duplicate check.'
+                    : 'Document rejected after duplicate check.',
+            data: {
+                ...reviewOutcome,
+                plagiarismResolution: {
+                    action,
+                    note: note || null,
+                    moderatorUserId: req.user.userId,
+                    plagiarismReview,
+                    plagiarismCheck,
+                    comparedDocument: topCandidate
+                        ? {
+                            documentId: topCandidate.documentId,
+                            title: topCandidate.title,
+                            plagiarismPercent: topCandidate.overallSimilarityPercent,
+                        }
+                        : null,
+                },
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const lockDocument = async (req, res, next) => {
+    try {
+        const documentId = Number(req.params.id);
+        const reason = normalizeLockReason(req.body?.reason);
+
+        if (!Number.isInteger(documentId) || documentId <= 0) {
+            const error = new Error('A valid document id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const document = await documentModel.getDocumentDetailById(documentId);
+
+        if (!document) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (document.status === DOCUMENT_STATUSES.HIDDEN) {
             const error = new Error('Document is already locked.');
             error.statusCode = 400;
             throw error;
@@ -985,7 +1386,7 @@ const lockDocument = async (req, res, next) => {
 
         await documentModel.updateDocumentStatus({
             documentId,
-            status: 'hidden',
+            status: DOCUMENT_STATUSES.HIDDEN,
         });
 
         await documentModel.logDocumentModerationAction({
@@ -1001,7 +1402,12 @@ const lockDocument = async (req, res, next) => {
                 title: 'Document locked for review',
                 message: `Your document "${document.title}" was locked for moderation review.`,
                 metadata: {
-                    documentId,
+                    ...buildDocumentOwnerNotificationMetadata({
+                        documentId,
+                        action: 'document.locked',
+                        moderatorUserId: req.user.userId,
+                        note: reason,
+                    }),
                     reason,
                 },
             });
@@ -1030,7 +1436,7 @@ const lockDocument = async (req, res, next) => {
 const unlockDocument = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { note } = req.body;
+        const note = normalizeModerationNote(req.body?.note);
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -1046,7 +1452,7 @@ const unlockDocument = async (req, res, next) => {
             throw error;
         }
 
-        if (document.status !== 'hidden') {
+        if (document.status !== DOCUMENT_STATUSES.HIDDEN) {
             const error = new Error('Only locked documents can be unlocked.');
             error.statusCode = 400;
             throw error;
@@ -1054,7 +1460,7 @@ const unlockDocument = async (req, res, next) => {
 
         await documentModel.updateDocumentStatus({
             documentId,
-            status: 'approved',
+            status: DOCUMENT_STATUSES.APPROVED,
         });
 
         await documentModel.logDocumentModerationAction({
@@ -1070,8 +1476,12 @@ const unlockDocument = async (req, res, next) => {
                 title: 'Document restored',
                 message: `Your document "${document.title}" was restored and is available again.`,
                 metadata: {
-                    documentId,
-                    note: note || null,
+                    ...buildDocumentOwnerNotificationMetadata({
+                        documentId,
+                        action: 'document.unlocked',
+                        moderatorUserId: req.user.userId,
+                        note: note || null,
+                    }),
                 },
             });
         } catch (notifyError) {
@@ -1099,7 +1509,8 @@ const unlockDocument = async (req, res, next) => {
 const deleteDocument = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { penaltyPoints, penaltyNote } = req.body || {};
+        const { penaltyPoints } = req.body || {};
+        const penaltyNote = normalizePenaltyNote(req.body?.penaltyNote);
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -1154,7 +1565,12 @@ const deleteDocument = async (req, res, next) => {
                 title: 'Document deleted by moderator',
                 message: `Your document "${document.title}" was deleted by moderator/admin.${pointMessage}`,
                 metadata: {
-                    documentId,
+                    ...buildDocumentOwnerNotificationMetadata({
+                        documentId,
+                        action: 'document.deleted',
+                        moderatorUserId: req.user.userId,
+                        note: penaltyNote || null,
+                    }),
                     deletedByUserId: req.user.userId,
                     deletedByRole: req.user.role,
                     deductedPoints: deleteResult.deductedPoints,
@@ -1184,6 +1600,7 @@ module.exports = {
     updateDocument,
     getDuplicateCandidates,
     checkDocumentPlagiarism,
+    recheckDocumentPlagiarism,
     getAllUploadedDocuments,
     getMyUploadedDocuments,
     getPendingDocuments,
@@ -1192,6 +1609,7 @@ module.exports = {
     getDocumentReportHistory,
     resolveReportedDocument,
     reviewDocument,
+    resolveDocumentPlagiarism,
     lockDocument,
     unlockDocument,
     deleteDocument,

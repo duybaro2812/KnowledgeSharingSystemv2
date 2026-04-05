@@ -37,6 +37,8 @@ const inferActionByType = (type) => {
         document_auto_locked: 'document.auto_locked',
         document_reported: 'document.reported',
         plagiarism_suspected: 'document.plagiarism_suspected',
+        plagiarism_approved_anyway: 'document.plagiarism_approved_anyway',
+        plagiarism_rejected_duplicate: 'document.plagiarism_rejected_duplicate',
         report_resolved_unlocked: 'report.resolved_unlock',
         report_resolved_deleted: 'report.resolved_delete',
         document_liked: 'document.liked',
@@ -56,6 +58,11 @@ const inferActionByType = (type) => {
         qa_session_message: 'qa.message',
         qa_session_closed: 'qa.closed',
         qa_rating_pending_review: 'qa.rating_pending_review',
+        account_locked: 'user.locked',
+        account_unlocked: 'user.unlocked',
+        account_soft_deleted: 'user.soft_deleted',
+        role_promoted_moderator: 'user.promoted_moderator',
+        role_changed_user: 'user.demoted_user',
     };
 
     return map[type] || null;
@@ -140,6 +147,16 @@ const buildTargetRoute = ({ type, metadata }) => {
     const documentId = Number(metadata.documentId);
     const commentId = Number(metadata.commentId);
     const qaSessionId = Number(metadata.qaSessionId || metadata.sessionId);
+    const targetType = metadata.target?.type;
+    const targetId = Number(metadata.target?.id);
+
+    if (targetType === 'moderation_queue') {
+        return '/moderation';
+    }
+
+    if (targetType === 'user' && Number.isInteger(targetId) && targetId > 0) {
+        return '/profile';
+    }
 
     if (Number.isInteger(qaSessionId) && qaSessionId > 0) {
         return `/qa-sessions/${qaSessionId}`;
@@ -176,7 +193,10 @@ const enrichMetadata = ({ type, metadata }) => {
 };
 
 const normalizeNotification = (record) => {
-    const metadata = parseMetadata(record?.metadata);
+    const metadata = enrichMetadata({
+        type: record?.type || '',
+        metadata: record?.metadata,
+    });
     const targetRoute = buildTargetRoute({
         type: record?.type || '',
         metadata,

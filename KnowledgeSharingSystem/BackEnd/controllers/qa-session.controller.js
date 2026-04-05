@@ -3,11 +3,21 @@ const pointEventModel = require('../models/point-event.model');
 const notificationModel = require('../models/notification.model');
 const { notifyModerators } = require('../services/notification-dispatcher.service');
 const { getSuggestedPointsByStars } = require('../config/point-policy');
+const { QA_SESSION_STATUSES } = require('../config/workflow-statuses');
+const { VALIDATION_RULES } = require('../config/validation-rules');
+const {
+    normalizeOptionalText,
+    normalizeRequiredText,
+} = require('../utils/input-sanitizer');
 
 const createSession = async (req, res, next) => {
     try {
         const documentId = Number(req.body.documentId);
-        const initialMessage = req.body.initialMessage || null;
+        const initialMessage = normalizeOptionalText({
+            value: req.body?.initialMessage,
+            fieldName: 'Initial message',
+            maxLength: VALIDATION_RULES.qa.initialMessageMax,
+        });
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
@@ -31,6 +41,12 @@ const createSession = async (req, res, next) => {
                     sessionId: session.sessionId,
                     documentId: session.documentId,
                     askerUserId: session.askerUserId,
+                    action: 'qa.opened',
+                    target: {
+                        type: 'qa_session',
+                        id: session.sessionId,
+                    },
+                    route: `/qa-sessions/${session.sessionId}`,
                 },
             });
         } catch (notifyError) {
@@ -51,10 +67,13 @@ const getMySessions = async (req, res, next) => {
     try {
         const { status } = req.query;
         let parsedStatus = null;
+        const allowedStatuses = Object.values(QA_SESSION_STATUSES);
 
         if (typeof status !== 'undefined' && status !== null && status !== '') {
-            if (!['open', 'closed'].includes(String(status))) {
-                const error = new Error("status must be either 'open' or 'closed'.");
+            if (!allowedStatuses.includes(String(status))) {
+                const error = new Error(
+                    `status must be one of '${allowedStatuses.join("', '")}'.`
+                );
                 error.statusCode = 400;
                 throw error;
             }
@@ -104,16 +123,14 @@ const getSessionMessages = async (req, res, next) => {
 const sendMessage = async (req, res, next) => {
     try {
         const sessionId = Number(req.params.id);
-        const message = req.body.message ? String(req.body.message).trim() : '';
+        const message = normalizeRequiredText({
+            value: req.body?.message,
+            fieldName: 'message',
+            maxLength: VALIDATION_RULES.qa.messageMax,
+        });
 
         if (!Number.isInteger(sessionId) || sessionId <= 0) {
             const error = new Error('A valid session id is required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (!message) {
-            const error = new Error('message is required.');
             error.statusCode = 400;
             throw error;
         }
@@ -139,6 +156,12 @@ const sendMessage = async (req, res, next) => {
                     sessionId,
                     messageId: result.message.messageId,
                     senderUserId: req.user.userId,
+                    action: 'qa.message',
+                    target: {
+                        type: 'qa_session',
+                        id: sessionId,
+                    },
+                    route: `/qa-sessions/${sessionId}`,
                 },
             });
         } catch (notifyError) {
@@ -183,6 +206,12 @@ const closeSession = async (req, res, next) => {
                     sessionId: session.sessionId,
                     documentId: session.documentId,
                     closedByUserId: req.user.userId,
+                    action: 'qa.closed',
+                    target: {
+                        type: 'qa_session',
+                        id: session.sessionId,
+                    },
+                    route: `/qa-sessions/${session.sessionId}`,
                 },
             });
         } catch (notifyError) {
@@ -203,7 +232,11 @@ const rateSession = async (req, res, next) => {
     try {
         const sessionId = Number(req.params.id);
         const stars = Number(req.body.stars);
-        const feedback = req.body.feedback ? String(req.body.feedback).trim() : null;
+        const feedback = normalizeOptionalText({
+            value: req.body?.feedback,
+            fieldName: 'feedback',
+            maxLength: VALIDATION_RULES.qa.feedbackMax,
+        });
 
         if (!Number.isInteger(sessionId) || sessionId <= 0) {
             const error = new Error('A valid session id is required.');
@@ -252,6 +285,12 @@ const rateSession = async (req, res, next) => {
                     stars,
                     pointEventId: pointEvent?.eventId || null,
                     suggestedPoints,
+                    action: 'qa.rating_pending_review',
+                    target: {
+                        type: 'moderation_queue',
+                        id: rated.sessionId,
+                    },
+                    route: `/moderation?qaSessionId=${rated.sessionId}`,
                 },
             });
         } catch (notifyError) {

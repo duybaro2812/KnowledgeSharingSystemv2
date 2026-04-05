@@ -15,6 +15,9 @@ router.get('/health', (req, res) => {
     res.json({
         success: true,
         message: 'API is healthy.',
+        data: {
+            status: 'ok',
+        },
     });
 });
 

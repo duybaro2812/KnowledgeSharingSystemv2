@@ -1,11 +1,19 @@
 const categoryModel = require('../models/category.model');
+const { VALIDATION_RULES } = require('../config/validation-rules');
+const {
+    normalizeRequiredText,
+    normalizeOptionalText,
+} = require('../utils/input-sanitizer');
 
 const getCategories = async (req, res, next) => {
     try {
-        const { keyword } = req.query;
+        const keyword = normalizeOptionalText({
+            value: req.query?.keyword,
+            maxLength: VALIDATION_RULES.category.nameMax,
+        });
 
         const categories = await categoryModel.getActiveCategories({
-            keyword: keyword ? String(keyword).trim() : null,
+            keyword,
         });
 
         res.json({
@@ -20,17 +28,19 @@ const getCategories = async (req, res, next) => {
 
 const createCategory = async (req, res, next) => {
     try {
-        const { name, description } = req.body;
-        const trimmedName = typeof name === 'string' ? name.trim() : '';
-
-        if (!trimmedName) {
-            const error = new Error('Category name is required.');
-            error.statusCode = 400;
-            throw error;
-        }
+        const name = normalizeRequiredText({
+            value: req.body?.name,
+            fieldName: 'Category name',
+            maxLength: VALIDATION_RULES.category.nameMax,
+        });
+        const description = normalizeOptionalText({
+            value: req.body?.description,
+            fieldName: 'Category description',
+            maxLength: VALIDATION_RULES.category.descriptionMax,
+        });
 
         const categoryId = await categoryModel.createCategory({
-            name: trimmedName,
+            name,
             description,
         });
 

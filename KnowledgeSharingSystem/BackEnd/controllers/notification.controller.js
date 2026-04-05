@@ -50,6 +50,10 @@ const markNotificationAsRead = async (req, res, next) => {
         res.json({
             success: true,
             message: 'Notification marked as read successfully.',
+            data: {
+                notificationId,
+                isRead: true,
+            },
         });
     } catch (error) {
         next(error);

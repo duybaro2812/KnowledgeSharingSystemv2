@@ -99,6 +99,12 @@ const updateReaction = async (req, res, next) => {
                         documentId,
                         reactorUserId: req.user.userId,
                         reactionType: normalizedReactionType,
+                        action: normalizedReactionType === 'like' ? 'document.liked' : 'document.disliked',
+                        target: {
+                            type: 'document',
+                            id: documentId,
+                        },
+                        route: `/documents/${documentId}`,
                     },
                 });
 
@@ -109,9 +115,10 @@ const updateReaction = async (req, res, next) => {
                 ) {
                     const pointEvent = await pointEventModel.createPointEvent({
                         userId: document.ownerUserId,
-                        eventType: 'upvote_received',
+                        eventType: pointEventModel.EVENT_TYPES.UPVOTE_RECEIVED,
                         points: Number(POINT_POLICY.rewards.upvoteReceived || 0),
                         documentId,
+                        sourceUserId: req.user.userId,
                         metadata: {
                             documentId,
                             reactorUserId: req.user.userId,
@@ -126,9 +133,15 @@ const updateReaction = async (req, res, next) => {
                             message: `Document like created a pending point event (eventId=${pointEvent.eventId}).`,
                             metadata: {
                                 eventId: pointEvent.eventId,
-                                eventType: 'upvote_received',
+                                eventType: pointEventModel.EVENT_TYPES.UPVOTE_RECEIVED,
                                 documentId,
                                 userId: document.ownerUserId,
+                                action: 'point.pending',
+                                target: {
+                                    type: 'moderation_queue',
+                                    id: pointEvent.eventId,
+                                },
+                                route: `/moderation?documentId=${documentId}&eventId=${pointEvent.eventId}`,
                             },
                         });
                     }
@@ -194,9 +207,10 @@ const updateSavedState = async (req, res, next) => {
             try {
                 const pointEvent = await pointEventModel.createPointEvent({
                     userId: document.ownerUserId,
-                    eventType: 'document_saved_by_other',
+                    eventType: pointEventModel.EVENT_TYPES.DOCUMENT_SAVED_BY_OTHER,
                     points: Number(POINT_POLICY.rewards.documentSavedByOther || 0),
                     documentId,
+                    sourceUserId: req.user.userId,
                     metadata: {
                         documentId,
                         saverUserId: req.user.userId,
@@ -213,6 +227,12 @@ const updateSavedState = async (req, res, next) => {
                     metadata: {
                         documentId,
                         saverUserId: req.user.userId,
+                        action: 'document.saved',
+                        target: {
+                            type: 'document',
+                            id: documentId,
+                        },
+                        route: `/documents/${documentId}`,
                     },
                 });
 
@@ -223,9 +243,15 @@ const updateSavedState = async (req, res, next) => {
                         message: `Document save created a pending point event (eventId=${pointEvent.eventId}).`,
                         metadata: {
                             eventId: pointEvent.eventId,
-                            eventType: 'document_saved_by_other',
+                            eventType: pointEventModel.EVENT_TYPES.DOCUMENT_SAVED_BY_OTHER,
                             documentId,
                             userId: document.ownerUserId,
+                            action: 'point.pending',
+                            target: {
+                                type: 'moderation_queue',
+                                id: pointEvent.eventId,
+                            },
+                            route: `/moderation?documentId=${documentId}&eventId=${pointEvent.eventId}`,
                         },
                     });
                 }

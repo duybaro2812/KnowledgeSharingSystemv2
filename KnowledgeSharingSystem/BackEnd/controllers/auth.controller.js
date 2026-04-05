@@ -3,18 +3,29 @@ const jwt = require('jsonwebtoken');
 const userModel = require('../models/user.model');
 const registrationOtpModel = require('../models/registration-otp.model');
 const { sendRegisterOtpEmail, sendPasswordResetOtpEmail } = require('../services/mail.service');
+const { VALIDATION_RULES } = require('../config/validation-rules');
+const {
+    normalizeRequiredText,
+    normalizeOptionalText,
+    normalizeEmail,
+    normalizeUsername,
+    normalizePassword,
+} = require('../utils/input-sanitizer');
 
 const OTP_EXPIRE_MINUTES = Number(process.env.OTP_EXPIRE_MINUTES || 10);
 
 const createLoginHandler = (options = {}) => async (req, res, next) => {
     try {
-        const { username, password } = req.body;
-
-        if (!username || !password) {
-            const error = new Error('Username and password are required.');
-            error.statusCode = 400;
-            throw error;
-        }
+        const username = normalizeUsername({
+            value: req.body?.username,
+            minLength: VALIDATION_RULES.auth.usernameMin,
+            maxLength: VALIDATION_RULES.auth.usernameMax,
+        });
+        const password = normalizePassword({
+            value: req.body?.password,
+            minLength: VALIDATION_RULES.auth.passwordMin,
+            maxLength: VALIDATION_RULES.auth.passwordMax,
+        });
 
         const user = await userModel.findUserByUsername(username);
 
@@ -87,23 +98,45 @@ const createLoginHandler = (options = {}) => async (req, res, next) => {
 };
 
 const validateRegisterPayload = ({ username, name, email, password, confirmPassword }) => {
-    if (!username || !name || !email || !password || !confirmPassword) {
-        const error = new Error('Username, name, email, password, and confirmPassword are required.');
-        error.statusCode = 400;
-        throw error;
-    }
+    const normalizedUsername = normalizeUsername({
+        value: username,
+        minLength: VALIDATION_RULES.auth.usernameMin,
+        maxLength: VALIDATION_RULES.auth.usernameMax,
+    });
+    const normalizedName = normalizeRequiredText({
+        value: name,
+        fieldName: 'Name',
+        maxLength: VALIDATION_RULES.auth.nameMax,
+    });
+    const normalizedEmail = normalizeEmail({
+        value: email,
+        maxLength: VALIDATION_RULES.auth.emailMax,
+    });
+    const normalizedPassword = normalizePassword({
+        value: password,
+        minLength: VALIDATION_RULES.auth.passwordMin,
+        maxLength: VALIDATION_RULES.auth.passwordMax,
+    });
+    const normalizedConfirmPassword = normalizePassword({
+        value: confirmPassword,
+        minLength: VALIDATION_RULES.auth.passwordMin,
+        maxLength: VALIDATION_RULES.auth.passwordMax,
+        fieldName: 'confirmPassword',
+    });
 
-    if (password !== confirmPassword) {
+    if (normalizedPassword !== normalizedConfirmPassword) {
         const error = new Error('Password and confirmPassword do not match.');
         error.statusCode = 400;
         throw error;
     }
 
-    if (password.length < 6) {
-        const error = new Error('Password must be at least 6 characters.');
-        error.statusCode = 400;
-        throw error;
-    }
+    return {
+        username: normalizedUsername,
+        name: normalizedName,
+        email: normalizedEmail,
+        password: normalizedPassword,
+        confirmPassword: normalizedConfirmPassword,
+    };
 };
 
 const ensureUniqueUserIdentity = async ({ username, email }) => {
@@ -124,8 +157,7 @@ const ensureUniqueUserIdentity = async ({ username, email }) => {
 
 const requestRegisterOtp = async (req, res, next) => {
     try {
-        const { username, name, email, password, confirmPassword } = req.body;
-        validateRegisterPayload({ username, name, email, password, confirmPassword });
+        const { username, name, email, password } = validateRegisterPayload(req.body || {});
         await ensureUniqueUserIdentity({ username, email });
 
         const passwordHash = await bcrypt.hash(password, 10);
@@ -133,16 +165,16 @@ const requestRegisterOtp = async (req, res, next) => {
         const expiresAt = new Date(Date.now() + OTP_EXPIRE_MINUTES * 60 * 1000);
 
         await registrationOtpModel.createOrReplaceRegistrationOtp({
-            username: username.trim(),
-            name: name.trim(),
-            email: email.trim().toLowerCase(),
+            username,
+            name,
+            email,
             passwordHash,
             otpCode,
             expiresAt,
         });
 
         const mailResult = await sendRegisterOtpEmail({
-            toEmail: email.trim().toLowerCase(),
+            toEmail: email,
             otpCode,
             expiresMinutes: OTP_EXPIRE_MINUTES,
         });
@@ -151,7 +183,7 @@ const requestRegisterOtp = async (req, res, next) => {
             success: true,
             message: 'OTP has been sent to your email.',
             data: {
-                email: email.trim().toLowerCase(),
+                email,
                 ...(mailResult.fallback ? { otpPreview: mailResult.otpCode } : {}),
             },
         });
@@ -162,16 +194,16 @@ const requestRegisterOtp = async (req, res, next) => {
 
 const verifyRegisterOtp = async (req, res, next) => {
     try {
-        const { email, otp } = req.body;
-
-        if (!email || !otp) {
-            const error = new Error('Email and OTP are required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        const normalizedEmail = String(email).trim().toLowerCase();
-        const normalizedOtp = String(otp).trim();
+        const normalizedEmail = normalizeEmail({
+            value: req.body?.email,
+            maxLength: VALIDATION_RULES.auth.emailMax,
+        });
+        const normalizedOtp = normalizeRequiredText({
+            value: req.body?.otp,
+            fieldName: 'OTP',
+            minLength: VALIDATION_RULES.auth.otpLength,
+            maxLength: VALIDATION_RULES.auth.otpLength,
+        });
         const otpRecord = await registrationOtpModel.findLatestActiveOtpByEmail(normalizedEmail);
 
         if (!otpRecord) {
@@ -222,15 +254,10 @@ const verifyRegisterOtp = async (req, res, next) => {
 
 const requestForgotPasswordOtp = async (req, res, next) => {
     try {
-        const { email } = req.body;
-
-        if (!email) {
-            const error = new Error('Email is required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        const normalizedEmail = String(email).trim().toLowerCase();
+        const normalizedEmail = normalizeEmail({
+            value: req.body?.email,
+            maxLength: VALIDATION_RULES.auth.emailMax,
+        });
         const existingUser = await userModel.findUserByEmail(normalizedEmail);
 
         if (!existingUser) {
@@ -272,28 +299,34 @@ const requestForgotPasswordOtp = async (req, res, next) => {
 
 const resetPasswordWithOtp = async (req, res, next) => {
     try {
-        const { email, otp, newPassword, confirmPassword } = req.body;
+        const normalizedEmail = normalizeEmail({
+            value: req.body?.email,
+            maxLength: VALIDATION_RULES.auth.emailMax,
+        });
+        const normalizedOtp = normalizeRequiredText({
+            value: req.body?.otp,
+            fieldName: 'OTP',
+            minLength: VALIDATION_RULES.auth.otpLength,
+            maxLength: VALIDATION_RULES.auth.otpLength,
+        });
+        const normalizedNewPassword = normalizePassword({
+            value: req.body?.newPassword,
+            minLength: VALIDATION_RULES.auth.passwordMin,
+            maxLength: VALIDATION_RULES.auth.passwordMax,
+            fieldName: 'newPassword',
+        });
+        const normalizedConfirmPassword = normalizePassword({
+            value: req.body?.confirmPassword,
+            minLength: VALIDATION_RULES.auth.passwordMin,
+            maxLength: VALIDATION_RULES.auth.passwordMax,
+            fieldName: 'confirmPassword',
+        });
 
-        if (!email || !otp || !newPassword || !confirmPassword) {
-            const error = new Error('Email, OTP, newPassword, and confirmPassword are required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (newPassword !== confirmPassword) {
+        if (normalizedNewPassword !== normalizedConfirmPassword) {
             const error = new Error('newPassword and confirmPassword do not match.');
             error.statusCode = 400;
             throw error;
         }
-
-        if (newPassword.length < 6) {
-            const error = new Error('Password must be at least 6 characters.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        const normalizedEmail = String(email).trim().toLowerCase();
-        const normalizedOtp = String(otp).trim();
 
         const otpRecord = await registrationOtpModel.findLatestActiveOtpByEmail(normalizedEmail);
 
@@ -322,7 +355,7 @@ const resetPasswordWithOtp = async (req, res, next) => {
             throw error;
         }
 
-        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+        const newPasswordHash = await bcrypt.hash(normalizedNewPassword, 10);
 
         await userModel.updatePassword({
             userId: existingUser.userId,
@@ -334,6 +367,10 @@ const resetPasswordWithOtp = async (req, res, next) => {
         res.json({
             success: true,
             message: 'Password reset successfully. Please login with your new password.',
+            data: {
+                email: normalizedEmail,
+                passwordReset: true,
+            },
         });
     } catch (error) {
         next(error);
@@ -342,13 +379,25 @@ const resetPasswordWithOtp = async (req, res, next) => {
 
 const register = async (req, res, next) => {
     try {
-        const { username, name, email, password } = req.body;
-
-        if (!username || !name || !email || !password) {
-            const error = new Error('Username, name, email, and password are required.');
-            error.statusCode = 400;
-            throw error;
-        }
+        const username = normalizeUsername({
+            value: req.body?.username,
+            minLength: VALIDATION_RULES.auth.usernameMin,
+            maxLength: VALIDATION_RULES.auth.usernameMax,
+        });
+        const name = normalizeRequiredText({
+            value: req.body?.name,
+            fieldName: 'Name',
+            maxLength: VALIDATION_RULES.auth.nameMax,
+        });
+        const email = normalizeEmail({
+            value: req.body?.email,
+            maxLength: VALIDATION_RULES.auth.emailMax,
+        });
+        const password = normalizePassword({
+            value: req.body?.password,
+            minLength: VALIDATION_RULES.auth.passwordMin,
+            maxLength: VALIDATION_RULES.auth.passwordMax,
+        });
 
         await ensureUniqueUserIdentity({ username, email });
 

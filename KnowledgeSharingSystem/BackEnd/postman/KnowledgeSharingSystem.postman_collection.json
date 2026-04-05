@@ -1,0 +1,493 @@
+{
+  "info": {
+    "_postman_id": "1f24a2b0-2b3e-48d2-9cc6-knowledge-sharing-system",
+    "name": "KnowledgeSharingSystem API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Postman collection co ban cho backend KnowledgeSharingSystem."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000/api" },
+    { "key": "token", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "documentId", "value": "1" },
+    { "key": "commentId", "value": "1" },
+    { "key": "sessionId", "value": "1" },
+    { "key": "pointEventId", "value": "1" },
+    { "key": "userId", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET Health",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST User Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"userdemo1\",\n  \"password\": \"user12345\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "POST Admin Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin123\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login/admin"
+          }
+        },
+        {
+          "name": "GET Me",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/auth/me"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "item": [
+        {
+          "name": "GET Categories",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/categories"
+          }
+        },
+        {
+          "name": "POST Create Category",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sample Category\",\n  \"description\": \"Created from Postman\"\n}"
+            },
+            "url": "{{baseUrl}}/categories"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Documents",
+      "item": [
+        {
+          "name": "GET Documents",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/documents"
+          }
+        },
+        {
+          "name": "GET Document Detail",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/documents/{{documentId}}"
+          }
+        },
+        {
+          "name": "GET Document Access",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/documents/{{documentId}}/access"
+          }
+        },
+        {
+          "name": "POST Report Document",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Noi dung nghi van / khong phu hop\"\n}"
+            },
+            "url": "{{baseUrl}}/documents/{{documentId}}/report"
+          }
+        },
+        {
+          "name": "GET Check Duplicate",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/documents/{{documentId}}/check-duplicate"
+          }
+        },
+        {
+          "name": "POST Plagiarism Recheck",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/documents/{{documentId}}/plagiarism-recheck"
+          }
+        },
+        {
+          "name": "PATCH Review Document",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"note\": \"Approved from Postman\"\n}"
+            },
+            "url": "{{baseUrl}}/documents/{{documentId}}/review"
+          }
+        },
+        {
+          "name": "PATCH Plagiarism Resolution",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"approve_anyway\",\n  \"note\": \"Moderator da doi chieu va chap nhan\"\n}"
+            },
+            "url": "{{baseUrl}}/documents/{{documentId}}/plagiarism-resolution"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Comments",
+      "item": [
+        {
+          "name": "GET Document Comments",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/documents/{{documentId}}/comments"
+          }
+        },
+        {
+          "name": "POST Create Comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Comment from Postman\"\n}"
+            },
+            "url": "{{baseUrl}}/documents/{{documentId}}/comments"
+          }
+        },
+        {
+          "name": "POST Reply Comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Reply from Postman\"\n}"
+            },
+            "url": "{{baseUrl}}/comments/{{commentId}}/replies"
+          }
+        },
+        {
+          "name": "GET Pending Comments",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/comments/moderation/pending"
+          }
+        },
+        {
+          "name": "PATCH Review Comment",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"note\": \"Approved from Postman\"\n}"
+            },
+            "url": "{{baseUrl}}/comments/{{commentId}}/review"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Q&A Sessions",
+      "item": [
+        {
+          "name": "POST Create Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documentId\": {{documentId}},\n  \"initialMessage\": \"Em muon hoi them ve tai lieu nay\"\n}"
+            },
+            "url": "{{baseUrl}}/qa-sessions"
+          }
+        },
+        {
+          "name": "GET My Sessions",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/qa-sessions/my"
+          }
+        },
+        {
+          "name": "GET Session Messages",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/qa-sessions/{{sessionId}}/messages"
+          }
+        },
+        {
+          "name": "POST Send Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Tin nhan tu Postman\"\n}"
+            },
+            "url": "{{baseUrl}}/qa-sessions/{{sessionId}}/messages"
+          }
+        },
+        {
+          "name": "PATCH Close Session",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/qa-sessions/{{sessionId}}/close"
+          }
+        },
+        {
+          "name": "POST Rate Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stars\": 4,\n  \"feedback\": \"Hoi dap tot\"\n}"
+            },
+            "url": "{{baseUrl}}/qa-sessions/{{sessionId}}/rate"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Points",
+      "item": [
+        {
+          "name": "GET Point Policy",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/points/policy"
+          }
+        },
+        {
+          "name": "GET My Point Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/points/me/summary"
+          }
+        },
+        {
+          "name": "GET My Point Transactions",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/points/me/transactions"
+          }
+        },
+        {
+          "name": "GET My Point Events",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/points/me/events"
+          }
+        },
+        {
+          "name": "GET Pending Point Events",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/points/events/pending"
+          }
+        },
+        {
+          "name": "PATCH Review Point Event",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"note\": \"Approved from Postman\"\n}"
+            },
+            "url": "{{baseUrl}}/points/events/{{pointEventId}}/review"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "GET Notification Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/notifications/summary"
+          }
+        },
+        {
+          "name": "GET My Notifications",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/notifications/my"
+          }
+        },
+        {
+          "name": "PATCH Read All Notifications",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/notifications/read-all"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Moderation",
+      "item": [
+        {
+          "name": "GET Moderation Queue",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/moderation/queue"
+          }
+        },
+        {
+          "name": "GET Moderation Stats",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/moderation/stats"
+          }
+        },
+        {
+          "name": "GET Moderation Timeline",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/moderation/timeline"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin Users",
+      "item": [
+        {
+          "name": "GET Users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/users"
+          }
+        },
+        {
+          "name": "GET Admin Audit Logs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/users/audit-logs"
+          }
+        },
+        {
+          "name": "PATCH User Role",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"moderator\"\n}"
+            },
+            "url": "{{baseUrl}}/users/{{userId}}/role"
+          }
+        },
+        {
+          "name": "PATCH User Active Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": false\n}"
+            },
+            "url": "{{baseUrl}}/users/{{userId}}/active-status"
+          }
+        }
+      ]
+    }
+  ]
+}

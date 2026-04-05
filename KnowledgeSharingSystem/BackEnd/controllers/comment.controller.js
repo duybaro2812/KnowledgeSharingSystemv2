@@ -5,6 +5,12 @@ const {
     notifyUserIfDifferent,
 } = require('../services/notification-dispatcher.service');
 const { POINT_POLICY } = require('../config/point-policy');
+const { COMMENT_STATUSES } = require('../config/workflow-statuses');
+const { VALIDATION_RULES } = require('../config/validation-rules');
+const {
+    normalizeRequiredText,
+    normalizeOptionalText,
+} = require('../utils/input-sanitizer');
 
 const actorLabel = (user) => user?.name || user?.username || 'A user';
 
@@ -62,16 +68,14 @@ const getDocumentComments = async (req, res, next) => {
 const createComment = async (req, res, next) => {
     try {
         const documentId = Number(req.params.id);
-        const { content } = req.body || {};
+        const content = normalizeRequiredText({
+            value: req.body?.content,
+            fieldName: 'Comment content',
+            maxLength: VALIDATION_RULES.comment.contentMax,
+        });
 
         if (!Number.isInteger(documentId) || documentId <= 0) {
             const error = new Error('A valid document id is required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (!content || !String(content).trim()) {
-            const error = new Error('Comment content is required.');
             error.statusCode = 400;
             throw error;
         }
@@ -81,7 +85,7 @@ const createComment = async (req, res, next) => {
         const commentId = await commentModel.createComment({
             documentId,
             authorUserId: req.user.userId,
-            content: String(content).trim(),
+            content,
         });
 
         const createdComment = await commentModel.getCommentById(commentId);
@@ -99,6 +103,12 @@ const createComment = async (req, res, next) => {
                         commentId,
                         authorUserId: req.user.userId,
                         status: 'pending',
+                        action: 'comment.pending_moderation',
+                        target: {
+                            type: 'moderation_queue',
+                            id: commentId,
+                        },
+                        route: `/moderation?documentId=${documentId}&commentId=${commentId}`,
                     },
                 });
             }
@@ -122,16 +132,14 @@ const createComment = async (req, res, next) => {
 const createReplyComment = async (req, res, next) => {
     try {
         const parentCommentId = Number(req.params.id);
-        const { content } = req.body || {};
+        const content = normalizeRequiredText({
+            value: req.body?.content,
+            fieldName: 'Reply content',
+            maxLength: VALIDATION_RULES.comment.contentMax,
+        });
 
         if (!Number.isInteger(parentCommentId) || parentCommentId <= 0) {
             const error = new Error('A valid parent comment id is required.');
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (!content || !String(content).trim()) {
-            const error = new Error('Reply content is required.');
             error.statusCode = 400;
             throw error;
         }
@@ -141,7 +149,7 @@ const createReplyComment = async (req, res, next) => {
         const commentId = await commentModel.createReplyComment({
             parentCommentId,
             authorUserId: req.user.userId,
-            content: String(content).trim(),
+            content,
         });
 
         const createdReply = await commentModel.getCommentById(commentId);
@@ -162,6 +170,12 @@ const createReplyComment = async (req, res, next) => {
                         replyCommentId: commentId,
                         authorUserId: req.user.userId,
                         status: 'pending',
+                        action: 'comment.reply_pending_moderation',
+                        target: {
+                            type: 'moderation_queue',
+                            id: commentId,
+                        },
+                        route: `/moderation?documentId=${documentInfo.documentId}&commentId=${commentId}`,
                     },
                 });
             }
@@ -230,8 +244,20 @@ const getPendingCommentsForModeration = async (req, res, next) => {
 const reviewComment = async (req, res, next) => {
     try {
         const commentId = Number(req.params.id);
-        const decision = String(req.body?.decision || '').trim().toLowerCase();
-        const note = req.body?.note ? String(req.body.note).trim() : null;
+        const decision = normalizeRequiredText({
+            value: req.body?.decision,
+            fieldName: 'decision',
+            maxLength: 20,
+        }).toLowerCase();
+        const note = normalizeOptionalText({
+            value: req.body?.note,
+            fieldName: 'note',
+            maxLength: VALIDATION_RULES.comment.moderationNoteMax,
+        });
+        const reviewableStatuses = [
+            COMMENT_STATUSES.APPROVED,
+            COMMENT_STATUSES.REJECTED,
+        ];
 
         if (!Number.isInteger(commentId) || commentId <= 0) {
             const error = new Error('A valid comment id is required.');
@@ -239,8 +265,10 @@ const reviewComment = async (req, res, next) => {
             throw error;
         }
 
-        if (!['approved', 'rejected'].includes(decision)) {
-            const error = new Error("decision must be either 'approved' or 'rejected'.");
+        if (!reviewableStatuses.includes(decision)) {
+            const error = new Error(
+                `decision must be one of '${reviewableStatuses.join("', '")}'.`
+            );
             error.statusCode = 400;
             throw error;
         }
@@ -252,7 +280,7 @@ const reviewComment = async (req, res, next) => {
             throw error;
         }
 
-        if (existingComment.status !== 'pending') {
+        if (existingComment.status !== COMMENT_STATUSES.PENDING) {
             const error = new Error('Only pending comments can be reviewed.');
             error.statusCode = 400;
             throw error;
@@ -289,15 +317,22 @@ const reviewComment = async (req, res, next) => {
                     documentId: reviewedComment.documentId,
                     decision,
                     note,
+                    action: decision === 'approved' ? 'comment.approved' : 'comment.rejected',
+                    target: {
+                        type: 'comment',
+                        id: commentId,
+                    },
+                    route: `/documents/${reviewedComment.documentId}?commentId=${commentId}`,
                 },
             });
 
             if (decision === 'approved') {
                 const commenterPointEvent = await createPointEventSafe({
                     userId: reviewedComment.authorUserId,
-                    eventType: 'comment_given',
+                    eventType: pointEventModel.EVENT_TYPES.COMMENT_GIVEN,
                     points: POINT_POLICY.rewards.commentGiven,
                     documentId: reviewedComment.documentId,
+                    commentId,
                     metadata: {
                         source: reviewedComment.parentCommentId ? 'comment_reply' : 'document_comment',
                         commentId,
@@ -315,9 +350,11 @@ const reviewComment = async (req, res, next) => {
                 ) {
                     const targetPointEvent = await createPointEventSafe({
                         userId: rewardTarget.targetUserId,
-                        eventType: 'comment_received',
+                        eventType: pointEventModel.EVENT_TYPES.COMMENT_RECEIVED,
                         points: POINT_POLICY.rewards.commentReceived,
                         documentId: reviewedComment.documentId,
+                        commentId,
+                        sourceUserId: reviewedComment.authorUserId,
                         metadata: {
                             source: reviewedComment.parentCommentId ? 'comment_reply' : 'document_comment',
                             commentId,
@@ -345,6 +382,14 @@ const reviewComment = async (req, res, next) => {
                             commentId,
                             documentId: reviewedComment.documentId,
                             parentCommentId: reviewedComment.parentCommentId,
+                            action: reviewedComment.parentCommentId
+                                ? 'comment.reply_approved'
+                                : 'comment.document_approved',
+                            target: {
+                                type: 'comment',
+                                id: commentId,
+                            },
+                            route: `/documents/${reviewedComment.documentId}?commentId=${commentId}`,
                         },
                     });
 
@@ -356,6 +401,12 @@ const reviewComment = async (req, res, next) => {
                             documentId: reviewedComment.documentId,
                             commentId,
                             pointEventIds: pendingPointEventIds,
+                            action: 'point.pending_from_comment',
+                            target: {
+                                type: 'moderation_queue',
+                                id: commentId,
+                            },
+                            route: `/moderation?documentId=${reviewedComment.documentId}&commentId=${commentId}`,
                         },
                     });
                 } else if (commenterPointEvent?.eventId) {
@@ -367,6 +418,12 @@ const reviewComment = async (req, res, next) => {
                             documentId: reviewedComment.documentId,
                             commentId,
                             pointEventIds: pendingPointEventIds,
+                            action: 'point.pending_from_comment',
+                            target: {
+                                type: 'moderation_queue',
+                                id: commentId,
+                            },
+                            route: `/moderation?documentId=${reviewedComment.documentId}&commentId=${commentId}`,
                         },
                     });
                 }

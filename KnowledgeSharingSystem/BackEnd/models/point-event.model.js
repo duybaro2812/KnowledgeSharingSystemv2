@@ -3,6 +3,11 @@ const { getPool, sql } = require('../utils/db');
 const EVENT_TYPES = {
     UPLOAD_SUBMITTED: 'upload_submitted',
     UPLOAD_APPROVED: 'upload_approved',
+    COMMENT_GIVEN: 'comment_given',
+    COMMENT_RECEIVED: 'comment_received',
+    UPVOTE_RECEIVED: 'upvote_received',
+    DOCUMENT_VIEWED: 'document_viewed',
+    DOCUMENT_SAVED_BY_OTHER: 'document_saved_by_other',
     QA_SESSION_RATED: 'qa_session_rated',
 };
 
@@ -22,7 +27,9 @@ const createPointEvent = async ({
     eventType,
     points,
     documentId = null,
+    commentId = null,
     qaSessionId = null,
+    sourceUserId = null,
     metadata = null,
 }) => {
     const pool = getPool();
@@ -33,7 +40,9 @@ const createPointEvent = async ({
         .input('eventType', sql.NVarChar(50), eventType)
         .input('points', sql.Int, points)
         .input('documentId', sql.Int, documentId)
+        .input('commentId', sql.Int, commentId)
         .input('qaSessionId', sql.Int, qaSessionId)
+        .input('sourceUserId', sql.Int, sourceUserId)
         .input('metadata', sql.NVarChar(sql.MAX), metadata ? JSON.stringify(metadata) : null)
         .query(`
             IF @eventType IN (N'upload_submitted', N'upload_approved')
@@ -50,6 +59,25 @@ const createPointEvent = async ({
                 FROM dbo.PointEvents
                 WHERE userId = @userId
                   AND documentId = @documentId
+                  AND eventType = @eventType
+                ORDER BY eventId DESC;
+                RETURN;
+            END;
+
+            IF @eventType IN (N'comment_given', N'comment_received')
+               AND @commentId IS NOT NULL
+               AND EXISTS (
+                    SELECT 1
+                    FROM dbo.PointEvents pe
+                    WHERE pe.userId = @userId
+                      AND pe.commentId = @commentId
+                      AND pe.eventType = @eventType
+               )
+            BEGIN
+                SELECT TOP 1 eventId, status
+                FROM dbo.PointEvents
+                WHERE userId = @userId
+                  AND commentId = @commentId
                   AND eventType = @eventType
                 ORDER BY eventId DESC;
                 RETURN;
@@ -74,8 +102,50 @@ const createPointEvent = async ({
                 RETURN;
             END;
 
-            INSERT INTO dbo.PointEvents (userId, eventType, points, status, documentId, qaSessionId, metadata)
-            VALUES (@userId, @eventType, @points, N'pending', @documentId, @qaSessionId, @metadata);
+            IF @eventType IN (N'upvote_received', N'document_saved_by_other')
+               AND @documentId IS NOT NULL
+               AND @sourceUserId IS NOT NULL
+               AND EXISTS (
+                    SELECT 1
+                    FROM dbo.PointEvents pe
+                    WHERE pe.userId = @userId
+                      AND pe.documentId = @documentId
+                      AND pe.sourceUserId = @sourceUserId
+                      AND pe.eventType = @eventType
+               )
+            BEGIN
+                SELECT TOP 1 eventId, status
+                FROM dbo.PointEvents
+                WHERE userId = @userId
+                  AND documentId = @documentId
+                  AND sourceUserId = @sourceUserId
+                  AND eventType = @eventType
+                ORDER BY eventId DESC;
+                RETURN;
+            END;
+
+            INSERT INTO dbo.PointEvents (
+                userId,
+                eventType,
+                points,
+                status,
+                documentId,
+                commentId,
+                qaSessionId,
+                sourceUserId,
+                metadata
+            )
+            VALUES (
+                @userId,
+                @eventType,
+                @points,
+                N'pending',
+                @documentId,
+                @commentId,
+                @qaSessionId,
+                @sourceUserId,
+                @metadata
+            );
 
             SELECT CAST(SCOPE_IDENTITY() AS INT) AS eventId, N'pending' AS status;
         `);
@@ -97,7 +167,9 @@ const getPendingPointEvents = async () => {
             pe.points,
             pe.status,
             pe.documentId,
+            pe.commentId,
             pe.qaSessionId,
+            pe.sourceUserId,
             d.title AS documentTitle,
             pe.metadata,
             pe.createdAt
@@ -135,6 +207,7 @@ const reviewPointEvent = async ({
                 pe.points,
                 pe.status,
                 pe.documentId,
+                pe.commentId,
                 pe.qaSessionId
             FROM dbo.PointEvents pe WITH (UPDLOCK, ROWLOCK)
             WHERE pe.eventId = @eventId;

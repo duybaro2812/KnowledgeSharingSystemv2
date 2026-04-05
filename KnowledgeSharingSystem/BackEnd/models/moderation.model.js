@@ -31,6 +31,11 @@ const getModerationStats = async ({ dateFrom = null, dateTo = null } = {}) => {
             (SELECT COUNT(1) FROM dbo.Comments WHERE status = N'pending') AS pendingComments,
             (SELECT COUNT(1) FROM dbo.Reports WHERE status IN (N'pending', N'reviewed')) AS pendingReports,
             (SELECT COUNT(1) FROM dbo.PointEvents WHERE status = N'pending') AS pendingPointEvents,
+            (
+                SELECT COUNT(1)
+                FROM dbo.DocumentPlagiarismReviews
+                WHERE CAST(createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+            ) AS plagiarismReviewsInRange,
 
             -- Reviewed in range
             (
@@ -155,6 +160,27 @@ const getModerationTimeline = async ({
 
             UNION ALL
 
+            -- Plagiarism review actions
+            SELECT
+                N'plagiarism_review' AS source,
+                CAST(pr.plagiarismReviewId AS BIGINT) AS sourceId,
+                pr.createdAt,
+                N'review_plagiarism' AS action,
+                pr.reviewedByUserId AS actorUserId,
+                actor.name AS actorName,
+                actor.role AS actorRole,
+                N'document' AS targetType,
+                pr.documentId AS targetId,
+                d.title AS targetName,
+                pr.decision AS decision,
+                pr.note AS note
+            FROM dbo.DocumentPlagiarismReviews pr
+            INNER JOIN dbo.Users actor ON actor.userId = pr.reviewedByUserId
+            LEFT JOIN dbo.Documents d ON d.documentId = pr.documentId
+            WHERE CAST(pr.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+
+            UNION ALL
+
             -- Report review actions
             SELECT
                 N'report_review' AS source,
@@ -253,6 +279,12 @@ const getModerationTimeline = async ({
                 N'deduct_points_on_delete'
             )
               AND CAST(ual.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+
+            UNION ALL
+
+            SELECT N'plagiarism_review' AS source, pr.plagiarismReviewId AS sourceId, pr.createdAt, pr.reviewedByUserId AS actorUserId
+            FROM dbo.DocumentPlagiarismReviews pr
+            WHERE CAST(pr.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
 
             UNION ALL
 

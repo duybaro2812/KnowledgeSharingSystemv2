@@ -1,13 +1,14 @@
 const express = require('express');
 const authMiddleware = require('../middlewares/auth.middleware');
 const roleMiddleware = require('../middlewares/role.middleware');
+const { commentRateLimiter } = require('../middlewares/rate-limit.middleware');
 const commentController = require('../controllers/comment.controller');
 
 const router = express.Router();
 
 router.get('/documents/:id/comments', authMiddleware, commentController.getDocumentComments);
-router.post('/documents/:id/comments', authMiddleware, commentController.createComment);
-router.post('/comments/:id/replies', authMiddleware, commentController.createReplyComment);
+router.post('/documents/:id/comments', authMiddleware, commentRateLimiter, commentController.createComment);
+router.post('/comments/:id/replies', authMiddleware, commentRateLimiter, commentController.createReplyComment);
 router.get(
     '/comments/moderation/pending',
     authMiddleware,

@@ -2,6 +2,10 @@ const express = require('express');
 const authMiddleware = require('../middlewares/auth.middleware');
 const roleMiddleware = require('../middlewares/role.middleware');
 const { documentUploadMiddleware } = require('../middlewares/upload.middleware');
+const {
+    uploadRateLimiter,
+    reportRateLimiter,
+} = require('../middlewares/rate-limit.middleware');
 const documentController = require('../controllers/document.controller');
 const documentEngagementController = require('../controllers/document-engagement.controller');
 const documentAccessController = require('../controllers/document-access.controller');
@@ -35,6 +39,12 @@ router.get(
     documentController.getDocumentReportHistory
 );
 router.get('/:id/plagiarism-check', authMiddleware, documentController.checkDocumentPlagiarism);
+router.post(
+    '/:id/plagiarism-recheck',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.recheckDocumentPlagiarism
+);
 router.get(
     '/:id/check-duplicate',
     authMiddleware,
@@ -46,6 +56,12 @@ router.patch(
     authMiddleware,
     roleMiddleware('admin', 'moderator'),
     documentController.reviewDocument
+);
+router.patch(
+    '/:id/plagiarism-resolution',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.resolveDocumentPlagiarism
 );
 router.patch(
     '/:id/lock',
@@ -65,7 +81,7 @@ router.delete(
     roleMiddleware('admin', 'moderator'),
     documentController.deleteDocument
 );
-router.post('/:id/report', authMiddleware, documentController.createDocumentReport);
+router.post('/:id/report', authMiddleware, reportRateLimiter, documentController.createDocumentReport);
 router.patch(
     '/:id/report-resolution',
     authMiddleware,
@@ -82,6 +98,7 @@ router.get('/:id', documentController.getDocumentDetail);
 router.post(
     '/',
     authMiddleware,
+    uploadRateLimiter,
     documentUploadMiddleware.single('documentFile'),
     documentController.createDocument
 );

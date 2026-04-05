@@ -28,6 +28,8 @@ const getDocumentAccessPolicy = async (req, res, next) => {
             message: 'Document access policy fetched successfully.',
             data: {
                 documentId,
+                documentTitle: document.title,
+                originalFileName: document.originalFileName,
                 ...policy,
             },
         });
@@ -123,9 +125,17 @@ const registerDownload = async (req, res, next) => {
             message: 'Download access granted.',
             data: {
                 documentId,
+                documentTitle: document.title,
+                originalFileName: document.originalFileName,
                 fileUrl: document.fileUrl,
                 chargedPoints,
                 remainingPoints,
+                downloadConfirmation: chargedPoints > 0
+                    ? {
+                        accepted: true,
+                        message: `Đã trừ ${chargedPoints} điểm để tải tài liệu "${document.title}".`,
+                    }
+                    : null,
             },
         });
     } catch (error) {

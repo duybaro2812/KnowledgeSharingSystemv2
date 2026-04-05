@@ -1,4 +1,5 @@
 const pointLedgerModel = require('../models/point-ledger.model');
+const { POINT_EVENT_STATUSES } = require('../config/workflow-statuses');
 
 const parseLimit = (rawLimit, defaultLimit = 50) => {
     const parsed = Number(rawLimit);
@@ -48,9 +49,12 @@ const getMyPointEvents = async (req, res, next) => {
     try {
         const limit = parseLimit(req.query.limit, 50);
         const status = req.query.status || null;
+        const allowedStatuses = Object.values(POINT_EVENT_STATUSES);
 
-        if (status && !['pending', 'approved', 'rejected'].includes(status)) {
-            const error = new Error("status must be one of 'pending', 'approved', 'rejected'.");
+        if (status && !allowedStatuses.includes(status)) {
+            const error = new Error(
+                `status must be one of '${allowedStatuses.join("', '")}'.`
+            );
             error.statusCode = 400;
             throw error;
         }
@@ -90,4 +94,3 @@ module.exports = {
     getMyPointEvents,
     getPointPolicy,
 };
-
