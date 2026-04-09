@@ -11,15 +11,33 @@ const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '*')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+const uploadEmbedOrigins = allowedOrigins.includes('*')
+    ? ["'self'", 'http://localhost:5173']
+    : ["'self'", ...allowedOrigins];
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+
+    const isEmbeddablePreviewRoute =
+        req.path.startsWith('/uploads/') ||
+        /^\/api\/documents\/\d+\/viewer\/content$/.test(req.path);
+
+    if (isEmbeddablePreviewRoute) {
+        res.setHeader(
+            'Content-Security-Policy',
+            `frame-ancestors ${uploadEmbedOrigins.join(' ')};`
+        );
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        next();
+        return;
+    }
+
+    res.setHeader('X-Frame-Options', 'DENY');
     next();
 });
 

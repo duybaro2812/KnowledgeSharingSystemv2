@@ -92,6 +92,8 @@ router.get('/:id/engagement', authMiddleware, documentEngagementController.getEn
 router.patch('/:id/reaction', authMiddleware, documentEngagementController.updateReaction);
 router.patch('/:id/save', authMiddleware, documentEngagementController.updateSavedState);
 router.get('/:id/access', authMiddleware, documentAccessController.getDocumentAccessPolicy);
+router.get('/:id/viewer', authMiddleware, documentAccessController.getDocumentViewer);
+router.get('/:id/viewer/content', authMiddleware, documentAccessController.streamPreparedViewerContent);
 router.post('/:id/view', authMiddleware, documentAccessController.registerFullView);
 router.post('/:id/download', authMiddleware, documentAccessController.registerDownload);
 router.get('/:id', documentController.getDocumentDetail);

@@ -15,109 +15,116 @@ export const parseCategoryNames = (raw) => {
 export function createUploadFeature(ctx) {
   const {
     token,
-    categories,
     uploadForm,
-    topicInput,
-    selectedTopics,
-    setCategories,
+    courseInput,
+    tagInput,
+    selectedTags,
     setUploadForm,
-    setSelectedTopics,
-    setTopicInput,
-    setShowTopicDropdown,
+    setCourseInput,
+    setShowCourseDropdown,
+    setTagInput,
+    setSelectedTags,
     setStatus,
+    setError,
+    isUploadSubmitting,
+    setIsUploadSubmitting,
+    isModerator,
     call,
     loadMyDocuments,
     loadPendingDocuments,
     loadCategories,
   } = ctx;
 
-  const syncSelectedTopicsToForm = (nextTopics) => {
-    setSelectedTopics(nextTopics);
-    setUploadForm((prev) => ({
-      ...prev,
-      categoryNames: nextTopics.join(", "),
-    }));
-  };
-
-  const addTopic = (name) => {
+  const selectCourse = (name) => {
     const normalized = String(name || "").trim();
     if (!normalized) return;
-    // Single-course behavior: selecting or creating one topic fills the textbox directly.
-    syncSelectedTopicsToForm([normalized]);
-    setTopicInput(normalized);
-    setShowTopicDropdown(false);
+    setUploadForm((prev) => ({
+      ...prev,
+      categoryNames: normalized,
+    }));
+    setCourseInput(normalized);
+    setShowCourseDropdown(false);
   };
 
-  const removeTopic = (name) => {
-    const next = selectedTopics.filter((item) => item !== name);
-    syncSelectedTopicsToForm(next);
-    if (!next.length) setTopicInput("");
+  const addTag = (name) => {
+    const normalized = String(name || "").trim();
+    if (!normalized) return;
+    if (selectedTags.includes(normalized)) {
+      setTagInput("");
+      return;
+    }
+    setSelectedTags((prev) => [...prev, normalized]);
+    setTagInput("");
   };
 
-  const onTopicInputKeyDown = (e) => {
+  const removeTag = (name) => {
+    setSelectedTags((prev) => prev.filter((item) => item !== name));
+  };
+
+  const onCourseInputKeyDown = (e) => {
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      if (topicInput.trim()) addTopic(topicInput);
+      if (courseInput.trim()) selectCourse(courseInput);
     }
   };
 
-  const ensureCategoryIdsByNames = async (names) => {
-    let current = [...categories];
-    const ids = [];
-    for (const name of names) {
-      let found = current.find((c) => c.name.toLowerCase() === name.toLowerCase());
-      if (!found) {
-        try {
-          const created = await apiRequest("/categories", {
-            method: "POST",
-            token,
-            body: { name, description: "" },
-          });
-          found = created.data;
-          current = [...current, found];
-        } catch (e) {
-          if (!String(e.message).toLowerCase().includes("already exists")) throw e;
-          const refreshed = await apiRequest("/categories", { query: { keyword: name } });
-          current = refreshed.data || current;
-          found = current.find((c) => c.name.toLowerCase() === name.toLowerCase());
-          if (!found) throw new Error(`Cannot resolve category: ${name}`);
-        }
-      }
-      ids.push(found.categoryId);
+  const onTagInputKeyDown = (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      if (tagInput.trim()) addTag(tagInput);
     }
-    setCategories(current);
-    return ids;
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
+    if (isUploadSubmitting) return;
+
+    setIsUploadSubmitting(true);
     await call(async () => {
-      const names = parseCategoryNames(uploadForm.categoryNames || topicInput);
-      if (!names.length) throw new Error("Please input at least one category name.");
-      const categoryIds = await ensureCategoryIdsByNames(names);
+      setStatus("Submitting document... Please wait while we process your file.");
+      setError("");
+
+      const names = parseCategoryNames(uploadForm.categoryNames || courseInput);
+      if (!names.length) throw new Error("Please input at least one course name.");
       const fd = new FormData();
       fd.append("title", uploadForm.title);
       fd.append("description", uploadForm.description);
-      fd.append("categoryIds", categoryIds.join(","));
+      fd.append("categoryNames", names.join(","));
       if (uploadForm.file) fd.append("documentFile", uploadForm.file);
 
       await apiRequest("/documents", { method: "POST", token, body: fd, isForm: true });
       setStatus("Upload successful. Document is pending review.");
+      setError("");
       setUploadForm({ title: "", description: "", categoryNames: "", file: null });
-      setSelectedTopics([]);
-      setTopicInput("");
-      setShowTopicDropdown(false);
+      setSelectedTags([]);
+      setCourseInput("");
+      setShowCourseDropdown(false);
+      setTagInput("");
       await loadMyDocuments();
-      await loadPendingDocuments();
+      if (isModerator) {
+        await loadPendingDocuments();
+      }
       await loadCategories();
+
+      if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
+        window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+      }
+      if (typeof document !== "undefined") {
+        const contentPane = document.querySelector(".content");
+        if (contentPane && typeof contentPane.scrollTo === "function") {
+          contentPane.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        }
+      }
     });
+    setIsUploadSubmitting(false);
   };
 
   return {
-    syncSelectedTopicsToForm,
-    addTopic,
-    removeTopic,
-    onTopicInputKeyDown,
+    selectCourse,
+    addTag,
+    removeTag,
+    onCourseInputKeyDown,
+    onTagInputKeyDown,
     handleUpload,
   };
 }

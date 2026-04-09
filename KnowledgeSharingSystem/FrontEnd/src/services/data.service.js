@@ -7,6 +7,7 @@ export function createDataFeature(ctx) {
     docFilter,
     setCategories,
     setDocs,
+    setHomeDocs,
     setMyDocs,
     setPendingDocs,
     setNotifications,
@@ -17,9 +18,16 @@ export function createDataFeature(ctx) {
     setCategories(payload.data || []);
   };
 
-  const loadDocuments = async () => {
-    const payload = await apiRequest("/documents", { query: docFilter });
+  const loadDocuments = async (nextFilter = docFilter) => {
+    const payload = await apiRequest("/documents", { query: nextFilter });
     setDocs(payload.data || []);
+  };
+
+  const loadHomeDocuments = async () => {
+    const payload = await apiRequest("/documents");
+    if (setHomeDocs) {
+      setHomeDocs(payload.data || []);
+    }
   };
 
   const loadMyDocuments = async () => {
@@ -46,6 +54,7 @@ export function createDataFeature(ctx) {
   return {
     loadCategories,
     loadDocuments,
+    loadHomeDocuments,
     loadMyDocuments,
     loadPendingDocuments,
     loadNotifications,

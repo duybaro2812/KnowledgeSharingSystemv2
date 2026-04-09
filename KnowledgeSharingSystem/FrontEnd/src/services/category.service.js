@@ -28,7 +28,7 @@ export function createCategoryFeature(ctx) {
           : payload.data.name,
       }));
       setNewCategoryForm({ name: "", description: "" });
-      setStatus("Category created.");
+      setStatus("Course created.");
       await loadCategories();
     });
   };
@@ -48,7 +48,7 @@ export function createCategoryFeature(ctx) {
       setSelectedCategory(category);
       setCategoryDocs(payload.data || []);
       setStatus(
-        `Loaded ${payload.data?.length || 0} documents for category "${category.name}".`,
+        `Loaded ${payload.data?.length || 0} documents for course "${category.name}".`,
       );
     });
   };

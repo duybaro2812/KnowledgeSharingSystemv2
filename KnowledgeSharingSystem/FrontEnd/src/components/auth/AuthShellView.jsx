@@ -7,20 +7,23 @@ import VerifyOtpForm from "./VerifyOtpForm";
 
 function AuthShellView(props) {
   const { model, controller, sharedProps } = props;
+  const mode = sharedProps.authMode || "login";
 
   return (
-    <div className="auth-shell">
+    <div className={`auth-shell mode-${mode}`}>
       <AuthLeftPanel />
 
-      {controller.isMode("login") && <LoginForm {...sharedProps} />}
-      {controller.isMode("forgot-password") && (
-        <ForgotPasswordRequestForm {...sharedProps} />
-      )}
-      {controller.isMode("forgot-verify") && <ForgotPasswordVerifyForm {...sharedProps} />}
-      {controller.isMode("register") && <RegisterForm {...sharedProps} />}
-      {controller.isMode("verify-otp") && <VerifyOtpForm {...sharedProps} />}
+      <div className="auth-form-stage">
+        {controller.isMode("login") && <LoginForm {...sharedProps} />}
+        {controller.isMode("forgot-password") && (
+          <ForgotPasswordRequestForm {...sharedProps} />
+        )}
+        {controller.isMode("forgot-verify") && <ForgotPasswordVerifyForm {...sharedProps} />}
+        {controller.isMode("register") && <RegisterForm {...sharedProps} />}
+        {controller.isMode("verify-otp") && <VerifyOtpForm {...sharedProps} />}
 
-      {model.status && <p className="ok">{model.status}</p>}
+        {model.status && <p className="ok auth-status-message">{model.status}</p>}
+      </div>
     </div>
   );
 }

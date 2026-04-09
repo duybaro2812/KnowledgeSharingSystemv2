@@ -37,6 +37,7 @@ const getDocumentForAccess = async (documentId) => {
                 d.title,
                 d.fileUrl,
                 d.originalFileName,
+                d.mimeType,
                 d.status
             FROM dbo.Documents d
             WHERE d.documentId = @documentId;

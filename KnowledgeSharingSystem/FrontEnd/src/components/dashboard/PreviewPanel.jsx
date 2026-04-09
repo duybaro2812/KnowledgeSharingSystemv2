@@ -8,13 +8,17 @@ function PreviewPanel(props) {
     onToggleLike,
     onToggleDislike,
     onToggleSave,
+    onDownload,
     onReport,
+    onStartQa,
     comments = [],
     onCreateComment,
     onCreateReply,
   } = props;
 
   const [isReportOpen, setIsReportOpen] = useState(false);
+  const [isQaOpen, setIsQaOpen] = useState(false);
+  const [qaMessage, setQaMessage] = useState("");
   const [reportReason, setReportReason] = useState("");
   const [commentInput, setCommentInput] = useState("");
   const [replyInputByCommentId, setReplyInputByCommentId] = useState({});
@@ -23,6 +27,7 @@ function PreviewPanel(props) {
   if (!previewDoc) return null;
 
   const isLocked = Boolean(previewDoc.isLockedForPoints);
+  const isLoading = Boolean(previewDoc.isLoading);
   const docId = Number(previewDoc.documentId || 0);
   const reaction = getDocReactionCounts
     ? getDocReactionCounts(docId)
@@ -39,6 +44,64 @@ function PreviewPanel(props) {
   }, [comments]);
 
   const rootComments = childrenByParent[0] || [];
+  const ownerUserId = Number(previewDoc.ownerUserId || previewDoc.ownerId || 0);
+  const currentUserId = Number(previewDoc.currentUserId || 0);
+  const normalizeName = (value) => String(value || "").trim().toLowerCase();
+  const isOwnerById =
+    Number.isInteger(ownerUserId) &&
+    ownerUserId > 0 &&
+    Number.isInteger(currentUserId) &&
+    currentUserId > 0 &&
+    ownerUserId === currentUserId;
+  const isOwnerByName =
+    !isOwnerById &&
+    normalizeName(previewDoc.ownerName) &&
+    normalizeName(previewDoc.currentUserName) &&
+    normalizeName(previewDoc.ownerName) === normalizeName(previewDoc.currentUserName);
+  const isOwner = Boolean(previewDoc.isOwner || isOwnerById || isOwnerByName);
+  const canAskAuthor = Number.isInteger(docId) && docId > 0 && !isOwner && Boolean(onStartQa);
+  const accessState = String(previewDoc.accessState || "").toLowerCase();
+  const tier = String(previewDoc.tier || "").toLowerCase();
+  const isPrivilegedState = accessState === "privileged" || tier === "privileged";
+  const isFullState = accessState === "full_access" || tier === "full_access";
+  const isLimitedState = accessState === "limited_full" || tier === "view_limited";
+  const hasFullAccess = !isLocked && (Boolean(previewDoc.canFullView) || isPrivilegedState || isFullState);
+  const lockedOverlayTitle = previewDoc.lockedOverlay?.title || "This document is locked";
+  const lockedOverlayMessage =
+    previewDoc.lockedOverlay?.message ||
+    `You need at least ${previewDoc.requiredPoints} points to unlock this document.`;
+  const lockedOverlayHelper =
+    previewDoc.lockedOverlay?.helperText ||
+    "You can still discuss, comment, reply, and ask the owner questions.";
+
+  let stateLabel = "Preview";
+  let stateClass = "state-preview";
+  let stateMessage = "You are viewing a limited document state.";
+
+  if (isLoading) {
+    stateLabel = "Preparing";
+    stateClass = "state-preparing";
+    stateMessage = "NeuShare is preparing your in-app viewer.";
+  } else if (isLocked) {
+    stateLabel = "Locked";
+    stateClass = "state-locked";
+    stateMessage = `Unlock from ${previewDoc.requiredPoints} points to read full document pages.`;
+  } else if (hasFullAccess) {
+    stateLabel = "Full Access";
+    stateClass = "state-full";
+    stateMessage = previewDoc.canDownload
+      ? "You can view and download this document."
+      : "You can view full content. Download is currently locked.";
+  } else if (isLimitedState || !isLocked) {
+    stateLabel = "Limited Full View";
+    stateClass = "state-limited";
+    stateMessage = previewDoc.accessReason || "Full view is currently limited by your access tier.";
+  }
+
+  const hasViewQuotaLimit =
+    previewDoc.dailyViewLimit !== null &&
+    previewDoc.dailyViewLimit !== undefined &&
+    Number(previewDoc.dailyViewLimit) > 0;
 
   const openReportModal = () => {
     setReportReason("");
@@ -50,6 +113,16 @@ function PreviewPanel(props) {
     setReportReason("");
   };
 
+  const openQaModal = () => {
+    setQaMessage("");
+    setIsQaOpen(true);
+  };
+
+  const closeQaModal = () => {
+    setIsQaOpen(false);
+    setQaMessage("");
+  };
+
   const handleSubmitReport = async () => {
     const normalized = reportReason.trim();
     if (!normalized) return;
@@ -57,6 +130,12 @@ function PreviewPanel(props) {
       await onReport(docId, normalized);
     }
     closeReportModal();
+  };
+
+  const handleStartQa = async () => {
+    if (!onStartQa) return;
+    await onStartQa(docId, qaMessage);
+    closeQaModal();
   };
 
   const handleCreateComment = async () => {
@@ -141,6 +220,7 @@ function PreviewPanel(props) {
           <p>
             {previewDoc.title} ({previewDoc.originalFileName})
           </p>
+          <p className="preview-owner">Author: {previewDoc.ownerName || "NeuShare member"}</p>
         </div>
         <div className="preview-head-actions">
           <button type="button" onClick={onClose}>
@@ -149,58 +229,131 @@ function PreviewPanel(props) {
         </div>
       </div>
 
-      {!isLocked && (
-        <div className="preview-actions">
-          <a className="preview-cta" href={previewDoc.fileUrl} target="_blank" rel="noreferrer">
-            Download
-          </a>
-          <button
-            type="button"
-            className={reaction.liked ? "active-like" : ""}
-            onClick={() => onToggleLike && onToggleLike(docId)}
-          >
-            👍 {reaction.likeCount || 0}
-          </button>
-          <button
-            type="button"
-            className={reaction.disliked ? "active-dislike" : ""}
-            onClick={() => onToggleDislike && onToggleDislike(docId)}
-          >
-            👎 {reaction.dislikeCount || 0}
-          </button>
-          <button type="button" onClick={() => onToggleSave && onToggleSave(docId)}>
-            {reaction.saved ? "Saved" : "Save"}
-          </button>
-          <button type="button" className="danger-ghost" onClick={openReportModal}>
+      <div className="preview-state-strip">
+        <div className={`preview-state-badge ${stateClass}`}>{stateLabel}</div>
+        <p className="preview-state-message">{stateMessage}</p>
+        <div className="preview-state-metrics">
+          <div className="preview-state-metric">
+            <span>Your points</span>
+            <b>{Number(previewDoc.points || 0)}</b>
+          </div>
+          <div className="preview-state-metric">
+            <span>Required points</span>
+            <b>{Number(previewDoc.requiredPoints || 30)}</b>
+          </div>
+          <div className="preview-state-metric">
+            <span>Download</span>
+            <b>
+              {previewDoc.canDownload
+                ? previewDoc.downloadCost > 0
+                  ? `${previewDoc.downloadCost} pts`
+                  : "Enabled"
+                : "Locked"}
+            </b>
+          </div>
+          <div className="preview-state-metric">
+            <span>View quota</span>
+            <b>
+              {hasViewQuotaLimit
+                ? `${Number(previewDoc.viewsRemainingToday || 0)} left`
+                : "Unlimited"}
+            </b>
+          </div>
+        </div>
+      </div>
+
+      <div className="preview-actions">
+        {!isLocked && (
+          <div className="preview-actions-left">
+            <button
+              type="button"
+              className="preview-cta"
+              disabled={!previewDoc.canDownload || isLoading}
+              onClick={() => onDownload && onDownload(docId, previewDoc)}
+              title={
+                previewDoc.canDownload
+                  ? previewDoc.downloadCost > 0
+                    ? `Download cost: ${previewDoc.downloadCost} points`
+                    : "Download document"
+                  : "Download is locked for your current point tier"
+              }
+            >
+              {previewDoc.canDownload
+                ? previewDoc.downloadCost > 0
+                  ? `Download (${previewDoc.downloadCost} pts)`
+                  : "Download"
+                : "Download locked"}
+            </button>
+            <button
+              type="button"
+              className={reaction.liked ? "active-like" : ""}
+              onClick={() => onToggleLike && onToggleLike(docId)}
+            >
+              👍 {reaction.likeCount || 0}
+            </button>
+            <button
+              type="button"
+              className={reaction.disliked ? "active-dislike" : ""}
+              onClick={() => onToggleDislike && onToggleDislike(docId)}
+            >
+              👎 {reaction.dislikeCount || 0}
+            </button>
+            <button type="button" onClick={() => onToggleSave && onToggleSave(docId)}>
+              {reaction.saved ? "Saved" : "Save"}
+            </button>
+          </div>
+        )}
+        <div className="preview-actions-right">
+          {canAskAuthor && (
+            <button type="button" className="preview-qa-btn" onClick={openQaModal}>
+              Ask author
+            </button>
+          )}
+          <button type="button" className="danger-ghost preview-report-btn" onClick={openReportModal}>
             Report Document
           </button>
         </div>
-      )}
+      </div>
 
       <div className="preview-frame-wrap">
         <div className={isLocked ? "preview-content blurred" : "preview-content"}>
-          {previewDoc.previewUrl ? (
+          {isLoading ? (
+            <div className="preview-loading-state">
+              <h3>Preparing viewer</h3>
+              <p>Your document is being opened inside NeuShare.</p>
+            </div>
+          ) : previewDoc.previewUrl ? (
             <iframe
               title={`preview-${previewDoc.title}`}
               src={previewDoc.previewUrl}
               className="preview-frame"
             />
           ) : (
-            <p>{previewDoc.previewReason || "No preview available for this file type."}</p>
+            <div className="preview-unavailable-state">
+              <h3>Viewer not ready</h3>
+              <p>{previewDoc.previewReason || "No preview available for this file type."}</p>
+              {previewDoc.fileUrl && (
+                <a href={previewDoc.fileUrl} target="_blank" rel="noreferrer">
+                  Open original file
+                </a>
+              )}
+            </div>
           )}
         </div>
 
         {isLocked && (
           <div className="preview-lock-overlay">
-            <h3>🔒 This is a preview</h3>
-            <p>
-              You need at least <b>{previewDoc.requiredPoints}</b> points to unlock this
-              document.
-            </p>
+            <h3>🔒 {lockedOverlayTitle}</h3>
+            <p>{lockedOverlayMessage}</p>
+            <small>{lockedOverlayHelper}</small>
             <div className="lock-overlay-actions">
-              <button type="button">Earn points</button>
-              <button type="button" className="danger-ghost" onClick={openReportModal}>
-                Report Document
+              {canAskAuthor && (
+                <button type="button" onClick={openQaModal}>
+                  Ask author
+                </button>
+              )}
+              <button type="button" onClick={openReportModal}>
+                Report
               </button>
             </div>
           </div>
@@ -262,6 +415,35 @@ function PreviewPanel(props) {
                 onClick={handleSubmitReport}
               >
                 Send report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isQaOpen && (
+        <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="report-modal">
+            <div className="report-modal-head">
+              <h3>Ask the author</h3>
+              <button type="button" className="report-close-btn" onClick={closeQaModal}>
+                ×
+              </button>
+            </div>
+            <p className="report-modal-sub">Start a private Q&A session with the document owner.</p>
+            <textarea
+              className="report-textarea"
+              value={qaMessage}
+              onChange={(e) => setQaMessage(e.target.value)}
+              placeholder="Write your first question..."
+              rows={4}
+            />
+            <div className="report-modal-actions">
+              <button type="button" onClick={closeQaModal}>
+                Cancel
+              </button>
+              <button type="button" className="primary-btn" onClick={handleStartQa}>
+                Start Q&A
               </button>
             </div>
           </div>

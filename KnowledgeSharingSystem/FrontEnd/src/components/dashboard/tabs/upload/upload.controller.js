@@ -5,16 +5,19 @@ export function createUploadController(input) {
       input.setUploadForm((p) => ({ ...p, title: value })),
     onChangeDescription: (value) =>
       input.setUploadForm((p) => ({ ...p, description: value })),
-    onTopicFocus: () => input.setShowTopicDropdown(true),
-    onTopicChange: (value) => {
-      input.setTopicInput(value);
+    onCourseFocus: () => input.setShowCourseDropdown(true),
+    onCourseChange: (value) => {
+      input.setCourseInput(value);
       input.setUploadForm((p) => ({ ...p, categoryNames: value }));
-      input.setShowTopicDropdown(true);
+      input.setShowCourseDropdown(true);
     },
-    onTopicKeyDown: input.onTopicInputKeyDown,
-    onAddTypedTopic: () => input.topicInput.trim() && input.addTopic(input.topicInput),
-    onAddTopic: (name) => input.addTopic(name),
-    onRemoveTopic: (name) => input.removeTopic(name),
+    onCourseKeyDown: input.onCourseInputKeyDown,
+    onAddTypedCourse: () => input.courseInput.trim() && input.selectCourse(input.courseInput),
+    onAddCourse: (name) => input.selectCourse(name),
+    onTagChange: (value) => input.setTagInput(value),
+    onTagKeyDown: input.onTagInputKeyDown,
+    onAddTypedTag: () => input.tagInput.trim() && input.addTag(input.tagInput),
+    onRemoveTag: (name) => input.removeTag(name),
     onPickFile: (file) =>
       input.setUploadForm((p) => ({
         ...p,

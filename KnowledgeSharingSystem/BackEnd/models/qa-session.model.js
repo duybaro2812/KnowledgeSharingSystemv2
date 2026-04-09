@@ -19,7 +19,18 @@ const getSessionByIdForUser = async ({ sessionId, userId }) => {
                 qs.status,
                 qs.createdAt,
                 qs.updatedAt,
-                qs.closedAt
+                qs.closedAt,
+                CAST(
+                    CASE
+                        WHEN EXISTS (
+                            SELECT 1
+                            FROM dbo.SessionRatings sr
+                            WHERE sr.sessionId = qs.sessionId
+                              AND sr.askerUserId = @userId
+                        ) THEN 1
+                        ELSE 0
+                    END AS BIT
+                ) AS hasRatedByCurrentUser
             FROM dbo.QuestionSessions qs
             INNER JOIN dbo.Documents d ON d.documentId = qs.documentId
             INNER JOIN dbo.Users asker ON asker.userId = qs.askerUserId
@@ -124,7 +135,18 @@ const getMySessions = async ({ userId, status = null }) => {
                 qs.closedAt,
                 lastMsg.message AS latestMessage,
                 lastMsg.createdAt AS latestMessageAt,
-                ISNULL(msgStats.totalMessages, 0) AS totalMessages
+                ISNULL(msgStats.totalMessages, 0) AS totalMessages,
+                CAST(
+                    CASE
+                        WHEN EXISTS (
+                            SELECT 1
+                            FROM dbo.SessionRatings sr
+                            WHERE sr.sessionId = qs.sessionId
+                              AND sr.askerUserId = @userId
+                        ) THEN 1
+                        ELSE 0
+                    END AS BIT
+                ) AS hasRatedByCurrentUser
             FROM dbo.QuestionSessions qs
             INNER JOIN dbo.Documents d ON d.documentId = qs.documentId
             INNER JOIN dbo.Users asker ON asker.userId = qs.askerUserId

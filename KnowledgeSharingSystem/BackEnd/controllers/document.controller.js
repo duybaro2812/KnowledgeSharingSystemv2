@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const documentModel = require('../models/document.model');
+const categoryModel = require('../models/category.model');
 const reportModel = require('../models/report.model');
 const notificationModel = require('../models/notification.model');
 const userModel = require('../models/user.model');
@@ -22,6 +23,11 @@ const {
 } = require('../services/cloudinary.service');
 const { buildPlagiarismAssessment } = require('../services/plagiarism.service');
 const { extractTextFromDocument } = require('../services/document-text-extraction.service');
+const {
+    prepareDocumentPreview,
+    getPreparedDocumentViewer,
+    cleanupDocumentPreviewAssets,
+} = require('../services/document-preview.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
 
@@ -67,6 +73,71 @@ const normalizePenaltyNote = (value) =>
         maxLength: VALIDATION_RULES.document.penaltyNoteMax,
     });
 
+const parseCategoryNames = (value) => {
+    if (Array.isArray(value)) {
+        return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))];
+    }
+
+    if (typeof value === 'string') {
+        return [
+            ...new Set(
+                value
+                    .split(',')
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+            ),
+        ];
+    }
+
+    return [];
+};
+
+const resolveCategoryIdsByNames = async (names = []) => {
+    const ids = [];
+
+    for (const rawName of names) {
+        const name = normalizeRequiredText({
+            value: rawName,
+            fieldName: 'Category name',
+            maxLength: VALIDATION_RULES.category.nameMax,
+        });
+
+        const candidates = await categoryModel.getActiveCategories({ keyword: name });
+        let found = (candidates || []).find(
+            (item) => String(item.name || '').trim().toLowerCase() === name.toLowerCase()
+        );
+
+        if (!found) {
+            try {
+                const createdCategoryId = await categoryModel.createCategory({
+                    name,
+                    description: '',
+                });
+                found = await categoryModel.getCategoryById(createdCategoryId);
+            } catch (error) {
+                if (Number(error.statusCode) !== 409) {
+                    throw error;
+                }
+
+                const refreshedCandidates = await categoryModel.getActiveCategories({ keyword: name });
+                found = (refreshedCandidates || []).find(
+                    (item) => String(item.name || '').trim().toLowerCase() === name.toLowerCase()
+                );
+            }
+        }
+
+        if (!found?.categoryId) {
+            const resolveError = new Error(`Cannot resolve category: ${name}`);
+            resolveError.statusCode = 400;
+            throw resolveError;
+        }
+
+        ids.push(Number(found.categoryId));
+    }
+
+    return [...new Set(ids)];
+};
+
 const deleteStoredDocumentFile = async (fileUrl) => {
     if (isCloudinaryAssetUrl(fileUrl)) {
         return deleteCloudinaryRawByUrl(fileUrl);
@@ -101,6 +172,46 @@ const buildAndStoreDocumentTextArtifact = async ({
     });
 
     return extractedDocumentText;
+};
+
+const buildViewerPreparationPayload = async ({
+    documentId,
+    fileUrl,
+    originalFileName,
+    mimeType,
+    title,
+    buffer = null,
+    forcePrepare = false,
+}) => {
+    if (buffer || forcePrepare) {
+        const manifest = await prepareDocumentPreview({
+            documentId,
+            fileUrl,
+            originalFileName,
+            mimeType,
+            title,
+            buffer,
+            force: forcePrepare,
+        });
+
+        return {
+            status: manifest.status,
+            reason: manifest.reason || null,
+            converter: manifest.converter || null,
+            generatedAt: manifest.generatedAt || null,
+            viewerUrl: manifest.viewer?.url || '',
+            viewerKind: manifest.viewer?.kind || null,
+            viewerMimeType: manifest.viewer?.mimeType || null,
+        };
+    }
+
+    return getPreparedDocumentViewer({
+        documentId,
+        fileUrl,
+        originalFileName,
+        mimeType,
+        title,
+    });
 };
 
 const notifyModerationTeam = async ({ type, title, message, metadata = null }) => {
@@ -411,7 +522,26 @@ const createDocument = async (req, res, next) => {
     try {
         const title = normalizeDocumentTitle(req.body?.title);
         const description = normalizeDocumentDescription(req.body?.description);
-        const { categoryIds } = req.body || {};
+        const body = req.body || {};
+        const explicitCategoryIds = body.categoryIds;
+        const categoryNames = parseCategoryNames(
+            body.categoryNames || body.courseNames || body.courseName || body.course
+        );
+
+        let resolvedCategoryIds = explicitCategoryIds;
+        if (categoryNames.length > 0) {
+            const idsFromNames = await resolveCategoryIdsByNames(categoryNames);
+
+            if (explicitCategoryIds) {
+                const explicitIds = String(explicitCategoryIds)
+                    .split(',')
+                    .map((item) => Number(item))
+                    .filter((item) => Number.isInteger(item) && item > 0);
+                resolvedCategoryIds = [...new Set([...explicitIds, ...idsFromNames])].join(',');
+            } else {
+                resolvedCategoryIds = idsFromNames.join(',');
+            }
+        }
 
         if (!req.file) {
             const error = new Error('A document file is required.');
@@ -436,10 +566,19 @@ const createDocument = async (req, res, next) => {
             fileSizeBytes: req.file.size,
             mimeType: req.file.mimetype,
             fileHash,
-            categoryIds,
+            categoryIds: resolvedCategoryIds,
         });
 
         const document = await documentModel.getDocumentDetailById(documentId);
+        const viewerPreparation = await buildViewerPreparationPayload({
+            documentId,
+            fileUrl,
+            originalFileName: req.file.originalname,
+            mimeType: req.file.mimetype,
+            title,
+            buffer: req.file.buffer,
+            forcePrepare: true,
+        });
 
         const extractedDocumentText = await buildAndStoreDocumentTextArtifact({
             documentId,
@@ -499,6 +638,7 @@ const createDocument = async (req, res, next) => {
                     tokenCount: extractedDocumentText.tokenCount,
                     warning: extractedDocumentText.extractionWarning || null,
                 },
+                viewerPreparation,
             },
         });
     } catch (error) {
@@ -673,11 +813,23 @@ const updateDocument = async (req, res, next) => {
         });
 
         const updatedDocument = await documentModel.getDocumentDetailById(documentId);
+        const viewerPreparation = await buildViewerPreparationPayload({
+            documentId,
+            fileUrl,
+            originalFileName,
+            mimeType,
+            title,
+            buffer: req.file?.buffer || null,
+            forcePrepare: Boolean(req.file),
+        });
 
         res.json({
             success: true,
             message: 'Document updated successfully.',
-            data: updatedDocument,
+            data: {
+                ...updatedDocument,
+                viewerPreparation,
+            },
         });
     } catch (error) {
         next(error);
@@ -1100,6 +1252,15 @@ const resolveReportedDocument = async (req, res, next) => {
             penaltyPoints: parsedPenaltyPoints,
             penaltyNote: note || null,
         });
+
+        try {
+            await cleanupDocumentPreviewAssets(documentId);
+        } catch (previewCleanupError) {
+            console.error(
+                'Failed to cleanup preview assets after reported document delete:',
+                previewCleanupError.message
+            );
+        }
 
         try {
             const pointMessage =
@@ -1552,6 +1713,15 @@ const deleteDocument = async (req, res, next) => {
             penaltyPoints: parsedPenaltyPoints,
             penaltyNote: penaltyNote || null,
         });
+
+        try {
+            await cleanupDocumentPreviewAssets(documentId);
+        } catch (previewCleanupError) {
+            console.error(
+                'Failed to cleanup preview assets after document delete:',
+                previewCleanupError.message
+            );
+        }
 
         try {
             const pointMessage =

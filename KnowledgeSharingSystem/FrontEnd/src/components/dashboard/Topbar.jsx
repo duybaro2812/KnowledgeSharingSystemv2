@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+function mapNotificationKind(rawType) {
+  const type = String(rawType || "").toLowerCase();
+  if (type.includes("qa") || type.includes("chat")) return "Q&A";
+  if (type.includes("point")) return "Points";
+  if (type.includes("plagiarism")) return "Plagiarism";
+  if (type.includes("report") || type.includes("moderation")) return "Moderation";
+  if (type.includes("comment") || type.includes("document")) return "Documents";
+  return "System";
+}
+
 function Topbar(props) {
   const {
     docFilter,
@@ -22,6 +32,7 @@ function Topbar(props) {
   const role = user?.role || "user";
   const isAdmin = role === "admin";
   const isModerator = role === "moderator";
+  const showTopbarSearch = role !== "user";
 
   const title = isAdmin
     ? "Admin Workspace"
@@ -66,19 +77,24 @@ function Topbar(props) {
         <p>{subtitle}</p>
       </div>
 
-      <div className="topbar-center">
-        <input
-          placeholder="Search for courses, quizzes, or documents"
-          value={docFilter.keyword}
-          onChange={(e) => setDocFilter((p) => ({ ...p, keyword: e.target.value }))}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") call(loadDocuments);
-          }}
-        />
-        <button className="primary-btn" onClick={() => call(loadDocuments)}>
-          Search
-        </button>
-      </div>
+      {showTopbarSearch && (
+        <div className="topbar-center">
+          <input
+            placeholder="Search for courses, quizzes, or documents"
+            value={docFilter.keyword}
+            onChange={(e) => setDocFilter((p) => ({ ...p, keyword: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              if (e.nativeEvent?.isComposing) return;
+              e.preventDefault();
+              call(loadDocuments);
+            }}
+          />
+          <button className="primary-btn" onClick={() => call(loadDocuments)}>
+            Search
+          </button>
+        </div>
+      )}
 
       <div className="topbar-right">
         <div className="notification-wrap" ref={notificationMenuRef}>
@@ -159,7 +175,10 @@ function Topbar(props) {
                     }}
                   >
                     <div className="notification-mini-main">
-                      <b>{n.title}</b>
+                      <div className="notification-mini-top">
+                        <b>{n.title}</b>
+                        <span className="notifications-kind-chip">{mapNotificationKind(n.type)}</span>
+                      </div>
                       <p>{n.message}</p>
                       <small>{new Date(n.createdAt).toLocaleString()}</small>
                     </div>
@@ -218,15 +237,26 @@ function Topbar(props) {
               </button>
 
               {role === "user" ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab("library");
-                    setOpenUserMenu(false);
-                  }}
-                >
-                  Uploads
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("library");
+                      setOpenUserMenu(false);
+                    }}
+                  >
+                    Uploads
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("qa");
+                      setOpenUserMenu(false);
+                    }}
+                  >
+                    Q&A sessions
+                  </button>
+                </>
               ) : (
                 <>
                   <button
