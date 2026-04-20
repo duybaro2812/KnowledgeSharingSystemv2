@@ -1,5 +1,6 @@
 export function createHomeController(input) {
   const runSearchWithFilter = async (nextFilter) => {
+    if (input.isBusy) return;
     await input.call(() => input.loadDocuments(nextFilter));
   };
 
@@ -16,8 +17,14 @@ export function createHomeController(input) {
         keyword: value,
       })),
     searchSuggestions: input.searchSuggestions || [],
-    onLiveSearch: async () => {
-      await runSearchWithFilter(input.docFilter);
+    onLiveSearch: async (keyword = "") => {
+      const normalized = String(keyword || input.docFilter?.keyword || "").trim();
+      if (normalized.length < 2) return;
+      const nextFilter = {
+        ...(input.docFilter || {}),
+        keyword: normalized,
+      };
+      await runSearchWithFilter(nextFilter);
     },
     onRunSearch: async () => {
       await runSearchWithFilter(input.docFilter);
@@ -46,7 +53,7 @@ export function createHomeController(input) {
     },
     onOpenCategory: async (category) => {
       if (!category?.name) {
-        input.setActiveTab("categories");
+        input.setActiveTab("search");
         return;
       }
 
@@ -59,7 +66,7 @@ export function createHomeController(input) {
       input.setDocFilter(() => nextFilter);
 
       await runSearchWithFilter(nextFilter);
-      input.setActiveTab("categories");
+      input.setActiveTab("search");
     },
     isOwnerDoc: (doc, currentUserId) =>
       Number(doc?.ownerUserId) === Number(currentUserId),

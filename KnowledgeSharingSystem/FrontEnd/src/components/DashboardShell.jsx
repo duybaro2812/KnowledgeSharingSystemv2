@@ -14,6 +14,7 @@ import SearchTab from "./dashboard/tabs/SearchTab";
 import SettingsTab from "./dashboard/tabs/SettingsTab";
 import UploadTab from "./dashboard/tabs/UploadTab";
 import UsersTab from "./dashboard/tabs/UsersTab";
+import DocumentsTab from "./dashboard/tabs/DocumentsTab";
 
 function DashboardShell(props) {
   const {
@@ -98,9 +99,6 @@ function DashboardShell(props) {
 
       <main className="content" ref={mainRef}>
         <Topbar {...props} />
-
-        {status && <p className="ok">{status}</p>}
-        {error && <p className="err">{error}</p>}
         <div className="floating-feedback-stack" aria-live="polite">
           {isBusy && <div className="floating-feedback floating-feedback-info">Processing...</div>}
           {statusToast && <div className="floating-feedback floating-feedback-success">{statusToast}</div>}
@@ -117,6 +115,7 @@ function DashboardShell(props) {
           {activeTab === "upload" && <UploadTab {...props} />}
           {activeTab === "moderation" && <ModerationTab {...props} />}
           {activeTab === "users" && <UsersTab {...props} />}
+          {activeTab === "documents" && <DocumentsTab {...props} />}
           {activeTab === "notifications" && <NotificationsTab {...props} />}
           {activeTab === "points" && <PointsTab {...props} />}
           {activeTab === "categories" && <CategoriesTab {...props} />}
@@ -134,6 +133,12 @@ function DashboardShell(props) {
               comments={previewComments}
               onCreateComment={createCommentForPreview}
               onCreateReply={createReplyForPreview}
+              onReviewCommentPoint={props.onReviewCommentPointFromPreview}
+              onHideComment={props.onHideCommentFromPreview}
+              isGuestMode={props.isGuestMode}
+              onNavigateToLogin={props.onNavigateToLogin}
+              onNavigateToRegister={props.onNavigateToRegister}
+              isBusy={isBusy}
             />
           )}
         </div>

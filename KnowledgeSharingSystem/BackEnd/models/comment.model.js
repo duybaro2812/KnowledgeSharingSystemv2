@@ -27,10 +27,32 @@ const getCommentsByDocumentId = async ({
                 c.reviewNote,
                 c.reviewedAt,
                 c.createdAt,
-                c.updatedAt
+                c.updatedAt,
+                pe.eventId AS pointEventId,
+                pe.status AS pointEventStatus,
+                pe.points AS pointEventPoints,
+                pe.reviewedAt AS pointEventReviewedAt,
+                pe.reviewNote AS pointEventReviewNote,
+                pe.reviewedByUserId AS pointEventReviewedByUserId,
+                ru.name AS pointEventReviewedByName
             FROM dbo.Comments c
             INNER JOIN dbo.Users u ON u.userId = c.authorUserId
             INNER JOIN dbo.Documents d ON d.documentId = c.documentId
+            OUTER APPLY (
+                SELECT TOP 1
+                    peInner.eventId,
+                    peInner.status,
+                    peInner.points,
+                    peInner.reviewedAt,
+                    peInner.reviewNote,
+                    peInner.reviewedByUserId
+                FROM dbo.PointEvents peInner
+                WHERE peInner.commentId = c.commentId
+                  AND peInner.eventType = N'comment_given'
+                  AND peInner.userId = c.authorUserId
+                ORDER BY peInner.eventId DESC
+            ) pe
+            LEFT JOIN dbo.Users ru ON ru.userId = pe.reviewedByUserId
             WHERE c.documentId = @documentId
               AND (
                     @includeHidden = 1
@@ -103,7 +125,7 @@ const createComment = async ({ documentId, authorUserId, content }) => {
             END;
 
             INSERT INTO dbo.Comments (documentId, authorUserId, content, status)
-            VALUES (@documentId, @authorUserId, @content, N'pending');
+            VALUES (@documentId, @authorUserId, @content, N'approved');
 
             SELECT CAST(SCOPE_IDENTITY() AS INT) AS commentId;
         `);
@@ -161,7 +183,7 @@ const createReplyComment = async ({ parentCommentId, authorUserId, content }) =>
                 @parentCommentId,
                 @authorUserId,
                 @content,
-                N'pending'
+                N'approved'
             );
 
             SELECT CAST(SCOPE_IDENTITY() AS INT) AS commentId;

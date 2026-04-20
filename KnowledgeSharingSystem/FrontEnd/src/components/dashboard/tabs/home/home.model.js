@@ -24,6 +24,23 @@ const getCategoryLabel = (doc) =>
   doc?.subject ||
   "Knowledge Pack";
 
+const parseCategoryTokens = (doc) => {
+  const rawValues = [
+    doc?.categoryName,
+    doc?.categoryNames,
+    doc?.category,
+    doc?.topic,
+    doc?.subject,
+  ].filter(Boolean);
+
+  const tokens = rawValues
+    .flatMap((value) => String(value).split(/[;,|]/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return [...new Set(tokens)];
+};
+
 const getEngagementScore = (doc) => Number(doc?.likeCount || 0) * 3 - Number(doc?.dislikeCount || 0);
 const toTime = (value) => {
   const time = new Date(value || 0).getTime();
@@ -154,22 +171,49 @@ export function createHomeModel(input) {
     )
     .slice(0, 6);
 
-  const courseCards = (Array.isArray(input.categories) ? input.categories : []).slice(0, 6).map((cat) => {
-    const keyword = String(cat?.name || "").toLowerCase();
-    const matchingDocs = docs.filter((doc) =>
-      [doc.categoryLabel, doc.description, doc.title]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(keyword)),
-    );
+  const categories = Array.isArray(input.categories) ? input.categories : [];
+  const apiCourseCards = categories
+    .map((cat) => ({
+      categoryId: Number(cat?.categoryId || 0),
+      name: String(cat?.name || "").trim(),
+      description:
+        cat?.description || "Curated learning materials, revision packs, and peer-reviewed notes.",
+      docCount: Number(cat?.documentCount || 0),
+    }))
+    .filter((cat) => cat.categoryId > 0 && cat.name && cat.docCount > 0)
+    .sort((left, right) => {
+      const countGap = right.docCount - left.docCount;
+      if (countGap !== 0) return countGap;
+      return left.name.localeCompare(right.name);
+    })
+    .slice(0, 6)
+    .map((cat) => ({
+      ...cat,
+      tone: ["teal", "blue", "slate", "sea"][cat.categoryId % 4],
+    }));
 
-    return {
-      categoryId: cat.categoryId,
-      name: cat.name,
-      description: cat.description || "Curated learning materials, revision packs, and peer-reviewed notes.",
-      docCount: matchingDocs.length,
-      tone: ["teal", "blue", "slate", "sea"][Number(cat.categoryId || 0) % 4],
-    };
+  // Fallback while backend/category cache is warming up.
+  const fallbackCountByCategory = new Map();
+  docs.forEach((doc) => {
+    parseCategoryTokens(doc).forEach((name) => {
+      const key = name.toLowerCase();
+      fallbackCountByCategory.set(key, Number(fallbackCountByCategory.get(key) || 0) + 1);
+    });
   });
+
+  const fallbackCourseCards = [...fallbackCountByCategory.entries()]
+    .filter(([, docCount]) => Number(docCount) > 0)
+    .map(([nameKey, docCount], index) => ({
+      categoryId: 100000 + index,
+      name: nameKey.replace(/\b\w/g, (ch) => ch.toUpperCase()),
+      description: "Curated learning materials, revision packs, and peer-reviewed notes.",
+      docCount: Number(docCount),
+      tone: ["teal", "blue", "slate", "sea"][index % 4],
+    }))
+    .sort((left, right) => right.docCount - left.docCount)
+    .slice(0, 6);
+
+  const courseCards = apiCourseCards.length > 0 ? apiCourseCards : fallbackCourseCards;
 
   const unreadNotifications = notifications.filter((item) => !item.isRead);
   const totalUpvotes = myDocs.reduce((sum, doc) => sum + Number(doc?.likeCount || 0), 0);
@@ -212,6 +256,7 @@ export function createHomeModel(input) {
     : [];
 
   return {
+    isBusy: Boolean(input.isBusy),
     user,
     role,
     currentUserId,

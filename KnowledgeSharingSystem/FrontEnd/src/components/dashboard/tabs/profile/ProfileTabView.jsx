@@ -5,6 +5,7 @@ function ProfileTabView(props) {
   return (
     <section className="panel">
       <h2>Profile</h2>
+      {model.isBusy && <p className="hint">Refreshing profile data...</p>}
       <div className="profile-page">
         <div className="profile-page-avatar">{(user?.name || "U").slice(0, 1).toUpperCase()}</div>
         <div className="profile-page-info">
@@ -17,16 +18,16 @@ function ProfileTabView(props) {
       </div>
       <div className="stats profile-page-stats">
         <div>
-          <b>{model.stats.followers}</b>
-          <span>Followers</span>
+          <b>{model.stats.uploads || 0}</b>
+          <span>Upload</span>
         </div>
         <div>
-          <b>{model.stats.uploads}</b>
-          <span>Uploads</span>
+          <b>{model.stats.pending || 0}</b>
+          <span>Pending</span>
         </div>
         <div>
-          <b>{model.stats.points}</b>
-          <span>Points</span>
+          <b>{model.stats.upvotes || 0}</b>
+          <span>Upvote</span>
         </div>
       </div>
     </section>

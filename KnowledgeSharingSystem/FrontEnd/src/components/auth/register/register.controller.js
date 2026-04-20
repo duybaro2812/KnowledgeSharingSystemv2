@@ -16,5 +16,9 @@ export function createRegisterController(input) {
       input.setAuthMode("login");
       input.clearFeedback();
     },
+    goGuest: () => {
+      input.setAuthMode("guest");
+      input.clearFeedback();
+    },
   };
 }

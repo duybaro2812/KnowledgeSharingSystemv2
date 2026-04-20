@@ -22,6 +22,10 @@ function Topbar(props) {
     notifications = [],
     markRead,
     openFromNotification,
+    isGuestMode,
+    onNavigateToLogin,
+    onNavigateToRegister,
+    isBusy,
   } = props;
 
   const [openUserMenu, setOpenUserMenu] = useState(false);
@@ -86,22 +90,47 @@ function Topbar(props) {
             onKeyDown={(e) => {
               if (e.key !== "Enter") return;
               if (e.nativeEvent?.isComposing) return;
+              if (isBusy) return;
               e.preventDefault();
-              call(loadDocuments);
+              call(loadDocuments, { actionKey: "search:topbar" });
             }}
           />
-          <button className="primary-btn" onClick={() => call(loadDocuments)}>
-            Search
+          <button
+            className="primary-btn"
+            disabled={isBusy}
+            onClick={() => call(loadDocuments, { actionKey: "search:topbar" })}
+          >
+            {isBusy ? "Searching..." : "Search"}
           </button>
         </div>
       )}
 
       <div className="topbar-right">
+        {isGuestMode ? (
+          <div className="topbar-auth-actions">
+            <button
+              type="button"
+              className="topbar-auth-btn topbar-auth-login"
+              onClick={() => onNavigateToLogin && onNavigateToLogin()}
+            >
+              Đăng nhập
+            </button>
+            <button
+              type="button"
+              className="topbar-auth-btn topbar-auth-register"
+              onClick={() => onNavigateToRegister && onNavigateToRegister()}
+            >
+              Đăng ký
+            </button>
+          </div>
+        ) : (
+          <>
         <div className="notification-wrap" ref={notificationMenuRef}>
           <button
             type="button"
             className="icon-btn bell-btn"
             title="Notifications"
+            disabled={isBusy}
             onClick={() => setOpenNotificationMenu((v) => !v)}
           >
             <svg
@@ -185,7 +214,8 @@ function Topbar(props) {
                     {!n.isRead && (
                       <button
                         type="button"
-                        className="mini-mark-read"
+                      className="mini-mark-read"
+                        disabled={isBusy}
                         onClick={(e) => {
                           e.stopPropagation();
                           if (markRead) markRead(n.notificationId);
@@ -205,6 +235,7 @@ function Topbar(props) {
           <button
             type="button"
             className="avatar-menu-trigger"
+            disabled={isBusy}
             onClick={() => setOpenUserMenu((v) => !v)}
             title={user?.name || "User menu"}
           >
@@ -268,6 +299,15 @@ function Topbar(props) {
                   >
                     Moderation
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("categories");
+                      setOpenUserMenu(false);
+                    }}
+                  >
+                    Courses
+                  </button>
                   {role === "admin" && (
                     <button
                       type="button"
@@ -298,6 +338,8 @@ function Topbar(props) {
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
     </header>
   );

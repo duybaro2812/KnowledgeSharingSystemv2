@@ -295,6 +295,7 @@ function HomeTabView(props) {
   const firstName = (model.user?.name || "Learner").split(" ")[0];
   const recentlyRef = useRef(null);
   const searchRef = useRef(null);
+  const lastLiveSearchedKeywordRef = useRef("");
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   useEffect(() => {
@@ -305,11 +306,18 @@ function HomeTabView(props) {
 
   useEffect(() => {
     const keyword = String(controller.searchKeyword || "").trim();
-    if (!keyword) return undefined;
+    if (keyword.length < 2) {
+      lastLiveSearchedKeywordRef.current = "";
+      return undefined;
+    }
+    if (lastLiveSearchedKeywordRef.current === keyword.toLowerCase()) {
+      return undefined;
+    }
 
     const timerId = setTimeout(() => {
-      controller.onLiveSearch();
-    }, 280);
+      lastLiveSearchedKeywordRef.current = keyword.toLowerCase();
+      controller.onLiveSearch(keyword);
+    }, 380);
 
     return () => clearTimeout(timerId);
   }, [controller.searchKeyword]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -359,6 +367,7 @@ function HomeTabView(props) {
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   if (e.nativeEvent?.isComposing) return;
+                  if (model.isBusy) return;
                   e.preventDefault();
                   setShowSuggestions(false);
                   controller.onRunSearch();
@@ -389,8 +398,13 @@ function HomeTabView(props) {
                 </div>
               )}
             </div>
-            <button type="button" className="home-gentle-search-btn" onClick={() => controller.onRunSearch()}>
-              Search
+            <button
+              type="button"
+              className="home-gentle-search-btn"
+              disabled={model.isBusy}
+              onClick={() => controller.onRunSearch()}
+            >
+              {model.isBusy ? "Searching..." : "Search"}
             </button>
           </div>
 
@@ -439,8 +453,8 @@ function HomeTabView(props) {
         subtitle="Materials receiving the most attention right now"
         docs={model.trendingDocs}
         icon={<TrendIcon />}
-        actionLabel="Live activity"
-        onAction={() => controller.onGoToTab("notifications")}
+        actionLabel="View all trending"
+        onAction={() => controller.onGoToTab("search")}
         onOpenDoc={controller.onSelectDocumentCard}
         rank
       />

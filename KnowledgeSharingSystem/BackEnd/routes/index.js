@@ -8,15 +8,33 @@ const notificationRoutes = require('./notification.route');
 const pointRoutes = require('./point.route');
 const qaSessionRoutes = require('./qa-session.route');
 const userRoutes = require('./user.route');
+const runtimeMetricsService = require('../services/runtime-metrics.service');
+const { isConnected, pingDB } = require('../utils/db');
 
 const router = express.Router();
 
-router.get('/health', (req, res) => {
-    res.json({
-        success: true,
-        message: 'API is healthy.',
+router.get('/health', async (req, res) => {
+    const runtime = runtimeMetricsService.getSnapshot();
+    let dbReady = false;
+
+    try {
+        dbReady = await pingDB();
+    } catch (error) {
+        dbReady = false;
+    }
+
+    const status = dbReady ? 'ok' : 'degraded';
+
+    res.status(dbReady ? 200 : 503).json({
+        success: dbReady,
+        message: dbReady ? 'API is healthy.' : 'API is running but database is unavailable.',
         data: {
-            status: 'ok',
+            status,
+            db: {
+                connected: isConnected(),
+                ready: dbReady,
+            },
+            runtime,
         },
     });
 });

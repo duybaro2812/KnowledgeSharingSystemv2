@@ -1,7 +1,7 @@
 import { apiRequest } from "../api";
 
 export function createCommentFeature(ctx) {
-  const { token, call, setStatus, setPreviewComments } = ctx;
+  const { token, call, setStatus, setPreviewComments, setPendingComments } = ctx;
 
   const loadCommentsByDocument = async (documentId) => {
     if (!documentId) {
@@ -45,9 +45,50 @@ export function createCommentFeature(ctx) {
     });
   };
 
+  const loadPendingCommentsForModeration = async () => {
+    if (!token) {
+      if (setPendingComments) setPendingComments([]);
+      return;
+    }
+
+    const payload = await apiRequest("/comments/moderation/pending", { token });
+    if (setPendingComments) {
+      setPendingComments(Array.isArray(payload.data) ? payload.data : []);
+    }
+  };
+
+  const reviewPendingComment = async (commentId, body) => {
+    await call(async () => {
+      const payload = await apiRequest(`/comments/${commentId}/review`, {
+        method: "PATCH",
+        token,
+        body,
+      });
+      setStatus(payload.message || "Comment reviewed successfully.");
+      await loadPendingCommentsForModeration();
+    });
+  };
+
+  const hideCommentForModeration = async (commentId, documentIdForRefresh = null) => {
+    await call(async () => {
+      const payload = await apiRequest(`/comments/${commentId}/hide`, {
+        method: "PATCH",
+        token,
+      });
+      setStatus(payload.message || "Comment hidden successfully.");
+      await loadPendingCommentsForModeration();
+      if (documentIdForRefresh) {
+        await loadCommentsByDocument(documentIdForRefresh);
+      }
+    });
+  };
+
   return {
     loadCommentsByDocument,
     createComment,
     createReply,
+    loadPendingCommentsForModeration,
+    reviewPendingComment,
+    hideCommentForModeration,
   };
 }

@@ -31,7 +31,11 @@ function NotificationsTabView(props) {
         </div>
         <div className="notifications-head-actions">
           <span className="notifications-unread-pill">{model.unreadCount} unread</span>
-          <button type="button" onClick={handleMarkAllRead} disabled={isMarkingAll || model.unreadCount === 0}>
+          <button
+            type="button"
+            onClick={handleMarkAllRead}
+            disabled={isMarkingAll || model.unreadCount === 0 || model.isBusy}
+          >
             {isMarkingAll ? "Marking..." : "Mark all read"}
           </button>
         </div>
@@ -86,6 +90,7 @@ function NotificationsTabView(props) {
               {!n.isRead && (
                 <button
                   type="button"
+                  disabled={isMarkingAll || model.isBusy}
                   onClick={(e) => {
                     e.stopPropagation();
                     controller.onMarkRead && controller.onMarkRead(n.notificationId);

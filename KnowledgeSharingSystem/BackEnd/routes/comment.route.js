@@ -27,6 +27,12 @@ router.patch(
     roleMiddleware('admin', 'moderator'),
     commentController.hideComment
 );
+router.post(
+    '/comments/:id/point-events/ensure',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    commentController.ensureCommentPointEvents
+);
 router.delete('/comments/:id', authMiddleware, commentController.deleteComment);
 
 module.exports = router;

@@ -115,7 +115,7 @@ export function createUploadFeature(ctx) {
           contentPane.scrollTo({ top: 0, left: 0, behavior: "smooth" });
         }
       }
-    });
+    }, { actionKey: "upload:submit" });
     setIsUploadSubmitting(false);
   };
 

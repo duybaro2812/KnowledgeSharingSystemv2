@@ -46,6 +46,9 @@ function LoginFormView(props) {
       <button type="button" onClick={controller.goRegister}>
         Create account
       </button>
+      <button type="button" className="link-btn" onClick={controller.goGuest}>
+        Continue as guest
+      </button>
       {model.error && <p className="err">{model.error}</p>}
     </form>
   );

@@ -1,11 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const apiRoutes = require('./routes');
 const authController = require('./controllers/auth.controller');
 const notificationModel = require('./models/notification.model');
+const runtimeMetricsService = require('./services/runtime-metrics.service');
+const { authRateLimiter } = require('./middlewares/rate-limit.middleware');
 
 const app = express();
+const enableAccessLog = process.env.ENABLE_ACCESS_LOG !== 'false';
+const slowRequestThresholdMs = Number(process.env.SLOW_REQUEST_THRESHOLD_MS || 1200);
 
 const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '*')
     .split(',')
@@ -17,6 +22,46 @@ const uploadEmbedOrigins = allowedOrigins.includes('*')
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
+
+app.use((req, res, next) => {
+    const requestId =
+        req.headers['x-request-id'] ||
+        (typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.round(Math.random() * 1e6)}`);
+    req.requestId = String(requestId);
+    res.setHeader('X-Request-Id', req.requestId);
+    next();
+});
+
+app.use((req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+
+    res.on('finish', () => {
+        const finishedAt = process.hrtime.bigint();
+        const durationMs = Number(finishedAt - startedAt) / 1e6;
+        runtimeMetricsService.recordRequest({
+            statusCode: res.statusCode,
+            durationMs,
+        });
+
+        const shouldLog =
+            enableAccessLog &&
+            (res.statusCode >= 400 || durationMs >= slowRequestThresholdMs);
+
+        if (shouldLog) {
+            const durationLabel = `${durationMs.toFixed(1)}ms`;
+            const userLabel = req.user?.userId ? ` user=${req.user.userId}` : '';
+            const requestIdLabel = req.requestId ? ` reqId=${req.requestId}` : '';
+            const ipLabel = req.ip ? ` ip=${req.ip}` : '';
+            console.log(
+                `${req.method} ${req.originalUrl} -> ${res.statusCode} (${durationLabel})${userLabel}${ipLabel}${requestIdLabel}`
+            );
+        }
+    });
+
+    next();
+});
 
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -61,8 +106,8 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use('/uploads', express.static(path.join(__dirname, process.env.UPLOAD_DIR || 'uploads')));
 
-app.post('/login', authController.login);
-app.post('/login/admin', authController.adminLogin);
+app.post('/login', authRateLimiter, authController.login);
+app.post('/login/admin', authRateLimiter, authController.adminLogin);
 
 app.use('/api', apiRoutes);
 
@@ -96,9 +141,21 @@ app.use(async (error, req, res, next) => {
         }
     }
 
+    if (statusCode >= 500) {
+        console.error(`[${req.requestId}] ${req.method} ${req.originalUrl} -> ${statusCode}: ${message}`);
+    }
+
+    if (Number(error.retryAfterSeconds) > 0) {
+        res.setHeader('Retry-After', String(Number(error.retryAfterSeconds)));
+    }
+
     res.status(statusCode).json({
         success: false,
         message,
+        requestId: req.requestId,
+        ...(Number(error.retryAfterSeconds) > 0
+            ? { retryAfterSeconds: Number(error.retryAfterSeconds) }
+            : {}),
     });
 });
 

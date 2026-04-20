@@ -77,6 +77,9 @@ export const createOpenPreview = (setPreviewDoc) => (doc) => {
     viewsRemainingToday: Number.isFinite(Number(doc.viewsRemainingToday))
       ? Number(doc.viewsRemainingToday)
       : null,
+    previewPageLimit: Number.isFinite(Number(doc.previewPageLimit))
+      ? Number(doc.previewPageLimit)
+      : null,
     lockedOverlay: doc.lockedOverlay || null,
     canDownload: Boolean(doc.canDownload),
     downloadCost: Number(doc.downloadCost || 0),
@@ -86,6 +89,7 @@ export const createOpenPreview = (setPreviewDoc) => (doc) => {
     isLoading: Boolean(doc.isLoading),
     currentUserId: doc.currentUserId || null,
     currentUserName: doc.currentUserName || "",
+    currentUserRole: doc.currentUserRole || "",
     isOwner: Boolean(doc.isOwner),
   });
 };

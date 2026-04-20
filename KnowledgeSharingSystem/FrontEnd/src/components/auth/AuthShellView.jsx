@@ -1,6 +1,7 @@
 import AuthLeftPanel from "./AuthLeftPanel";
 import ForgotPasswordRequestForm from "./ForgotPasswordRequestForm";
 import ForgotPasswordVerifyForm from "./ForgotPasswordVerifyForm";
+import GuestLanding from "./GuestLanding";
 import LoginForm from "./LoginForm";
 import RegisterForm from "./RegisterForm";
 import VerifyOtpForm from "./VerifyOtpForm";
@@ -14,6 +15,7 @@ function AuthShellView(props) {
       <AuthLeftPanel />
 
       <div className="auth-form-stage">
+        {controller.isMode("guest") && <GuestLanding {...sharedProps} />}
         {controller.isMode("login") && <LoginForm {...sharedProps} />}
         {controller.isMode("forgot-password") && (
           <ForgotPasswordRequestForm {...sharedProps} />

@@ -40,6 +40,7 @@ function QaTabView(props) {
     ? model.sessions.filter((session) => session.status === "open").length
     : 0;
   const closedSessions = Math.max(0, totalSessions - openSessions);
+  const globalBusy = Boolean(model.isBusy);
 
   const canRateSession = useMemo(() => {
     if (!activeSession) return false;
@@ -128,7 +129,7 @@ function QaTabView(props) {
             Q&A sessions{" "}
             {model.unreadCount > 0 && (
               <span className="qa-unread-pill" aria-label={`${model.unreadCount} unread Q&A notifications`}>
-                {model.unreadCount}
+                {model.unreadCount > 10 ? "10+" : model.unreadCount}
               </span>
             )}
           </h2>
@@ -151,8 +152,8 @@ function QaTabView(props) {
             <option value="open">Open only</option>
             <option value="closed">Closed only</option>
           </select>
-          <button type="button" onClick={handleRefresh} disabled={isRefreshing}>
-            {isRefreshing ? "Refreshing..." : "Refresh"}
+          <button type="button" onClick={handleRefresh} disabled={isRefreshing || globalBusy}>
+            {isRefreshing || globalBusy ? "Refreshing..." : "Refresh"}
           </button>
         </div>
       </div>
@@ -184,7 +185,7 @@ function QaTabView(props) {
                   type="button"
                   className={`qa-session-card ${isActive ? "active" : ""} ${isUnread ? "unread" : ""}`}
                   onClick={() => handleOpenSession(session)}
-                  disabled={isOpening}
+                  disabled={isOpening || globalBusy}
                 >
                   <div className="qa-session-card-top">
                     <strong>{session.documentTitle}</strong>
@@ -228,7 +229,7 @@ function QaTabView(props) {
                       type="button"
                       className="danger-ghost"
                       onClick={handleCloseSession}
-                      disabled={isClosingSession}
+                      disabled={isClosingSession || globalBusy}
                     >
                       {isClosingSession ? "Closing..." : "Close session"}
                     </button>
@@ -280,12 +281,12 @@ function QaTabView(props) {
                       onChange={(e) => setDraftMessage(e.target.value)}
                       onKeyDown={handleComposerKeyDown}
                       placeholder="Write your message..."
-                      disabled={isSending}
+                      disabled={isSending || globalBusy}
                     />
                     <button
                       type="button"
                       className="qa-send-btn"
-                      disabled={!draftMessage.trim() || isSending}
+                      disabled={!draftMessage.trim() || isSending || globalBusy}
                       onClick={submitMessage}
                       aria-label="Send message"
                       title="Send message"
@@ -311,7 +312,7 @@ function QaTabView(props) {
                   <button
                     type="button"
                     className="primary-btn qa-send-mobile"
-                    disabled={!draftMessage.trim() || isSending}
+                    disabled={!draftMessage.trim() || isSending || globalBusy}
                     onClick={submitMessage}
                   >
                     {isSending ? "Sending..." : "Send message"}
@@ -344,9 +345,14 @@ function QaTabView(props) {
                     value={ratingFeedback}
                     onChange={(e) => setRatingFeedback(e.target.value)}
                     placeholder="Share brief feedback for this Q&A session..."
-                    disabled={isRating}
+                    disabled={isRating || globalBusy}
                   />
-                  <button type="button" className="primary-btn" onClick={submitRating} disabled={isRating}>
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    onClick={submitRating}
+                    disabled={isRating || globalBusy}
+                  >
                     {isRating ? "Submitting..." : "Submit rating"}
                   </button>
                 </div>

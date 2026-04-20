@@ -6,6 +6,8 @@ export function createRegisterModel(input) {
     hasRegisterPasswordInput: !!input.hasRegisterPasswordInput,
     registerPasswordInvalid: !!input.registerPasswordInvalid,
     registerPasswordStrength: input.registerPasswordStrength,
+    resendCooldown: input.resendCooldown || 0,
+    isRegisterOtpSending: !!input.isRegisterOtpSending,
     error: input.error || "",
   };
 }

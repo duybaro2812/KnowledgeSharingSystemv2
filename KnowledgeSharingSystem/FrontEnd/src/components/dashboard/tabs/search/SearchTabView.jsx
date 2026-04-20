@@ -17,7 +17,9 @@ function SearchTabView(props) {
         </button>
       </div>
 
-      {model.docs.length === 0 ? (
+      {model.isBusy ? (
+        <p className="hint">Searching documents...</p>
+      ) : model.docs.length === 0 ? (
         <p className="hint">No documents found for this keyword.</p>
       ) : (
         <div className="reading-row">

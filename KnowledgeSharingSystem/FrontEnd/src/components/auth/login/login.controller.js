@@ -16,5 +16,9 @@ export function createLoginController(input) {
       input.setAuthMode("register");
       input.clearFeedback();
     },
+    goGuest: () => {
+      input.setAuthMode("guest");
+      input.clearFeedback();
+    },
   };
 }

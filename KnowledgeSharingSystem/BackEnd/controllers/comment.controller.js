@@ -92,33 +92,91 @@ const createComment = async (req, res, next) => {
 
         try {
             const documentInfo = await commentModel.getDocumentOwnerForComments(documentId);
+            const pendingPointEventIds = [];
 
-            if (documentInfo) {
-                await notifyModerators({
-                    type: 'comment_pending_moderation',
-                    title: 'Comment pending moderation',
-                    message: `${actorLabel(req.user)} submitted a comment on "${documentInfo.documentTitle}".`,
+            const commenterPointEvent = await createPointEventSafe({
+                userId: req.user.userId,
+                eventType: pointEventModel.EVENT_TYPES.COMMENT_GIVEN,
+                points: POINT_POLICY.rewards.commentGiven,
+                documentId,
+                commentId,
+                metadata: {
+                    source: 'document_comment',
+                    commentId,
+                    autoApproved: true,
+                },
+            });
+            if (commenterPointEvent?.eventId) {
+                pendingPointEventIds.push(Number(commenterPointEvent.eventId));
+            }
+
+            if (
+                documentInfo &&
+                Number(documentInfo.ownerUserId) > 0 &&
+                Number(documentInfo.ownerUserId) !== Number(req.user.userId)
+            ) {
+                const ownerPointEvent = await createPointEventSafe({
+                    userId: Number(documentInfo.ownerUserId),
+                    eventType: pointEventModel.EVENT_TYPES.COMMENT_RECEIVED,
+                    points: POINT_POLICY.rewards.commentReceived,
+                    documentId,
+                    commentId,
+                    sourceUserId: req.user.userId,
+                    metadata: {
+                        source: 'document_comment',
+                        commentId,
+                        fromUserId: req.user.userId,
+                        autoApproved: true,
+                    },
+                });
+                if (ownerPointEvent?.eventId) {
+                    pendingPointEventIds.push(Number(ownerPointEvent.eventId));
+                }
+
+                await notifyUserIfDifferent({
+                    actorUserId: req.user.userId,
+                    receiverUserId: Number(documentInfo.ownerUserId),
+                    type: 'document_comment_approved',
+                    title: 'New comment',
+                    message: `${actorLabel(req.user)} commented on your document.`,
                     metadata: {
                         documentId,
                         commentId,
-                        authorUserId: req.user.userId,
-                        status: 'pending',
-                        action: 'comment.pending_moderation',
+                        action: 'comment.document_approved',
                         target: {
-                            type: 'moderation_queue',
+                            type: 'comment',
                             id: commentId,
                         },
-                        route: `/moderation?documentId=${documentId}&commentId=${commentId}`,
+                        route: `/documents/${documentId}?commentId=${commentId}`,
                     },
                 });
             }
+
+            await notifyModerators({
+                type: 'comment_points_pending_review',
+                title: 'Comment posted - point review pending',
+                message: `${actorLabel(req.user)} posted a comment on "${documentInfo?.documentTitle || 'document'}".`,
+                metadata: {
+                    documentId,
+                    commentId,
+                    authorUserId: req.user.userId,
+                    status: 'approved',
+                    pointEventIds: pendingPointEventIds,
+                    action: 'point.pending_from_comment',
+                    target: {
+                        type: 'comment',
+                        id: commentId,
+                    },
+                    route: `/moderation?documentId=${documentId}&commentId=${commentId}`,
+                },
+            });
         } catch (notifyError) {
-            console.error('Failed to create comment notifications:', notifyError.message);
+            console.error('Failed to create comment notifications/point-events:', notifyError.message);
         }
 
         res.status(201).json({
             success: true,
-            message: 'Comment submitted and is pending moderation.',
+            message: 'Comment posted successfully. Point rewards are pending moderator score review.',
             data: createdComment,
         });
     } catch (error) {
@@ -158,34 +216,96 @@ const createReplyComment = async (req, res, next) => {
             const documentInfo = createdReply?.documentId
                 ? await commentModel.getDocumentOwnerForComments(createdReply.documentId)
                 : null;
+            const pendingPointEventIds = [];
 
-            if (documentInfo) {
-                await notifyModerators({
-                    type: 'comment_reply_pending_moderation',
-                    title: 'Reply pending moderation',
-                    message: `${actorLabel(req.user)} submitted a reply in "${documentInfo.documentTitle}".`,
+            const replierPointEvent = await createPointEventSafe({
+                userId: req.user.userId,
+                eventType: pointEventModel.EVENT_TYPES.COMMENT_GIVEN,
+                points: POINT_POLICY.rewards.commentGiven,
+                documentId: createdReply.documentId,
+                commentId,
+                metadata: {
+                    source: 'comment_reply',
+                    parentCommentId,
+                    commentId,
+                    autoApproved: true,
+                },
+            });
+            if (replierPointEvent?.eventId) {
+                pendingPointEventIds.push(Number(replierPointEvent.eventId));
+            }
+
+            const rewardTarget = await commentModel.getCommentRewardTargetUserId(commentId);
+            if (
+                rewardTarget &&
+                Number(rewardTarget.targetUserId) > 0 &&
+                Number(rewardTarget.targetUserId) !== Number(req.user.userId)
+            ) {
+                const targetPointEvent = await createPointEventSafe({
+                    userId: Number(rewardTarget.targetUserId),
+                    eventType: pointEventModel.EVENT_TYPES.COMMENT_RECEIVED,
+                    points: POINT_POLICY.rewards.commentReceived,
+                    documentId: createdReply.documentId,
+                    commentId,
+                    sourceUserId: req.user.userId,
                     metadata: {
-                        documentId: documentInfo.documentId,
+                        source: 'comment_reply',
                         parentCommentId,
-                        replyCommentId: commentId,
-                        authorUserId: req.user.userId,
-                        status: 'pending',
-                        action: 'comment.reply_pending_moderation',
+                        commentId,
+                        fromUserId: req.user.userId,
+                        autoApproved: true,
+                    },
+                });
+                if (targetPointEvent?.eventId) {
+                    pendingPointEventIds.push(Number(targetPointEvent.eventId));
+                }
+
+                await notifyUserIfDifferent({
+                    actorUserId: req.user.userId,
+                    receiverUserId: Number(rewardTarget.targetUserId),
+                    type: 'comment_reply_approved',
+                    title: 'New reply',
+                    message: `${actorLabel(req.user)} replied to your comment.`,
+                    metadata: {
+                        documentId: createdReply.documentId,
+                        commentId,
+                        parentCommentId,
+                        action: 'comment.reply_approved',
                         target: {
-                            type: 'moderation_queue',
+                            type: 'comment',
                             id: commentId,
                         },
-                        route: `/moderation?documentId=${documentInfo.documentId}&commentId=${commentId}`,
+                        route: `/documents/${createdReply.documentId}?commentId=${commentId}`,
                     },
                 });
             }
+
+            await notifyModerators({
+                type: 'comment_points_pending_review',
+                title: 'Reply posted - point review pending',
+                message: `${actorLabel(req.user)} posted a reply in "${documentInfo?.documentTitle || 'document'}".`,
+                metadata: {
+                    documentId: createdReply.documentId,
+                    parentCommentId,
+                    replyCommentId: commentId,
+                    authorUserId: req.user.userId,
+                    status: 'approved',
+                    pointEventIds: pendingPointEventIds,
+                    action: 'point.pending_from_comment',
+                    target: {
+                        type: 'comment',
+                        id: commentId,
+                    },
+                    route: `/moderation?documentId=${createdReply.documentId}&commentId=${commentId}`,
+                },
+            });
         } catch (notifyError) {
-            console.error('Failed to create reply notifications:', notifyError.message);
+            console.error('Failed to create reply notifications/point-events:', notifyError.message);
         }
 
         res.status(201).json({
             success: true,
-            message: 'Reply submitted and is pending moderation.',
+            message: 'Reply posted successfully. Point rewards are pending moderator score review.',
             data: createdReply,
         });
     } catch (error) {
@@ -494,6 +614,110 @@ const hideComment = async (req, res, next) => {
     }
 };
 
+const ensureCommentPointEvents = async (req, res, next) => {
+    try {
+        const commentId = Number(req.params.id);
+
+        if (!Number.isInteger(commentId) || commentId <= 0) {
+            const error = new Error('A valid comment id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const comment = await commentModel.getCommentById(commentId);
+        if (!comment) {
+            const error = new Error('Comment not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (String(comment.status || '').toLowerCase() !== COMMENT_STATUSES.APPROVED) {
+            const error = new Error('Only approved comments can generate point events.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const pendingPointEventIds = [];
+        const commenterPointEvent = await createPointEventSafe({
+            userId: comment.authorUserId,
+            eventType: pointEventModel.EVENT_TYPES.COMMENT_GIVEN,
+            points: POINT_POLICY.rewards.commentGiven,
+            documentId: comment.documentId,
+            commentId,
+            metadata: {
+                source: comment.parentCommentId ? 'comment_reply' : 'document_comment',
+                parentCommentId: comment.parentCommentId || null,
+                commentId,
+                ensuredByUserId: req.user.userId,
+            },
+        });
+        if (commenterPointEvent?.eventId) {
+            pendingPointEventIds.push(Number(commenterPointEvent.eventId));
+        }
+
+        const rewardTarget = await commentModel.getCommentRewardTargetUserId(commentId);
+        let targetPointEvent = null;
+        if (
+            rewardTarget &&
+            Number(rewardTarget.targetUserId) > 0 &&
+            Number(rewardTarget.targetUserId) !== Number(comment.authorUserId)
+        ) {
+            targetPointEvent = await createPointEventSafe({
+                userId: Number(rewardTarget.targetUserId),
+                eventType: pointEventModel.EVENT_TYPES.COMMENT_RECEIVED,
+                points: POINT_POLICY.rewards.commentReceived,
+                documentId: comment.documentId,
+                commentId,
+                sourceUserId: comment.authorUserId,
+                metadata: {
+                    source: comment.parentCommentId ? 'comment_reply' : 'document_comment',
+                    parentCommentId: comment.parentCommentId || null,
+                    commentId,
+                    fromUserId: comment.authorUserId,
+                    ensuredByUserId: req.user.userId,
+                },
+            });
+            if (targetPointEvent?.eventId) {
+                pendingPointEventIds.push(Number(targetPointEvent.eventId));
+            }
+        }
+
+        try {
+            await notifyModerators({
+                type: 'comment_points_pending_review',
+                title: 'Comment point events ready',
+                message: `Comment #${commentId} now has point events ready for score review.`,
+                metadata: {
+                    documentId: comment.documentId,
+                    commentId,
+                    pointEventIds: pendingPointEventIds,
+                    action: 'point.pending_from_comment',
+                    target: {
+                        type: 'comment',
+                        id: commentId,
+                    },
+                    route: `/moderation?documentId=${comment.documentId}&commentId=${commentId}`,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to notify moderators after ensuring comment point events:', notifyError.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Comment point events are ready for review.',
+            data: {
+                commentId,
+                commenterPointEvent,
+                targetPointEvent,
+                pointEventIds: pendingPointEventIds,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 const deleteComment = async (req, res, next) => {
     try {
         const commentId = Number(req.params.id);
@@ -546,5 +770,6 @@ module.exports = {
     getPendingCommentsForModeration,
     reviewComment,
     hideComment,
+    ensureCommentPointEvents,
     deleteComment,
 };

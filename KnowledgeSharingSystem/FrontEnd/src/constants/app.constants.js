@@ -12,9 +12,9 @@ export const hasModeratorRole = (role) =>
   role === "admin" || role === "moderator";
 
 export const roleTabs = {
-  user: ["home", "upload", "points", "notifications", "categories"],
-  moderator: ["home", "upload", "points", "moderation", "categories"],
-  admin: ["home", "upload", "points", "moderation", "users", "categories"],
+  user: ["home", "upload", "points", "notifications"],
+  moderator: ["home", "upload", "points", "moderation", "documents", "categories"],
+  admin: ["home", "upload", "points", "moderation", "documents", "users", "categories"],
 };
 
 export const tabLabel = {
@@ -22,7 +22,8 @@ export const tabLabel = {
   upload: "Upload",
   points: "Points",
   moderation: "Moderation",
+  documents: "Documents",
   users: "Users",
   notifications: "Notifications",
-  categories: "Categories",
+  categories: "Courses",
 };

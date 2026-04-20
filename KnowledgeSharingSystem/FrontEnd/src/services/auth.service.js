@@ -6,6 +6,8 @@ export function createAuthFeature(ctx) {
     call,
     loginForm,
     registerForm,
+    resendCooldown,
+    isRegisterOtpSending,
     forgotEmail,
     otpEmail,
     otpCode,
@@ -20,6 +22,7 @@ export function createAuthFeature(ctx) {
     setOtpEmail,
     setOtpPreview,
     setResendCooldown,
+    setIsRegisterOtpSending,
     setRegisterForm,
     setOtpCode,
     setForgotEmail,
@@ -48,11 +51,14 @@ export function createAuthFeature(ctx) {
       await loadMyDocuments();
       await loadNotifications();
       if (hasModeratorRole(nextUser?.role)) await loadPendingDocuments(nextToken);
-    });
+    }, { actionKey: `auth:login:${loginForm.username}` });
   };
 
   const handleRequestOtp = async (e) => {
     e.preventDefault();
+    if (isRegisterOtpSending || resendCooldown > 0) return;
+
+    setIsRegisterOtpSending(true);
     await call(async () => {
       if (!isStrongPassword(registerForm.password)) {
         throw new Error(
@@ -68,10 +74,12 @@ export function createAuthFeature(ctx) {
       setAuthMode("verify-otp");
       setResendCooldown(60);
       setStatus("OTP sent. Please check your email.");
-    });
+    }, { actionKey: `auth:register-otp:${registerForm.email}` });
+    setIsRegisterOtpSending(false);
   };
 
   const handleResendOtp = async () => {
+    if (resendCooldown > 0) return;
     await call(async () => {
       const payload = await apiRequest("/auth/register/request-otp", {
         method: "POST",
@@ -81,7 +89,7 @@ export function createAuthFeature(ctx) {
       setOtpPreview(payload.data.otpPreview || "");
       setResendCooldown(60);
       setStatus("OTP resent. Please check your email.");
-    });
+    }, { actionKey: `auth:register-resend:${registerForm.email}` });
   };
 
   const handleVerifyOtp = async (e) => {
@@ -100,7 +108,7 @@ export function createAuthFeature(ctx) {
       setOtpCode("");
       setOtpEmail("");
       setOtpPreview("");
-    });
+    }, { actionKey: `auth:register-verify:${otpEmail}` });
   };
 
   const handleForgotPassword = async (e) => {
@@ -116,7 +124,7 @@ export function createAuthFeature(ctx) {
       setAuthMode("forgot-verify");
       setResendCooldown(60);
       setStatus("Password reset OTP sent. Please check your email.");
-    });
+    }, { actionKey: `auth:forgot-request:${forgotEmail}` });
   };
 
   const handleResendForgotOtp = async () => {
@@ -129,7 +137,7 @@ export function createAuthFeature(ctx) {
       setForgotOtpPreview(payload.data.otpPreview || "");
       setResendCooldown(60);
       setStatus("Password reset OTP resent. Please check your email.");
-    });
+    }, { actionKey: `auth:forgot-resend:${forgotEmail}` });
   };
 
   const handleResetPasswordWithOtp = async (e) => {
@@ -156,7 +164,7 @@ export function createAuthFeature(ctx) {
       setForgotConfirmPassword("");
       setForgotOtpPreview("");
       setResendCooldown(0);
-    });
+    }, { actionKey: `auth:forgot-reset:${forgotEmail}` });
   };
 
   return {

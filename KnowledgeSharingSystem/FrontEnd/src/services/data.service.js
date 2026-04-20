@@ -10,6 +10,7 @@ export function createDataFeature(ctx) {
     setHomeDocs,
     setMyDocs,
     setPendingDocs,
+    setAdminDocuments,
     setNotifications,
   } = ctx;
 
@@ -25,8 +26,12 @@ export function createDataFeature(ctx) {
 
   const loadHomeDocuments = async () => {
     const payload = await apiRequest("/documents");
+    const list = payload.data || [];
+    if (setDocs) {
+      setDocs(list);
+    }
     if (setHomeDocs) {
-      setHomeDocs(payload.data || []);
+      setHomeDocs(list);
     }
   };
 
@@ -40,6 +45,17 @@ export function createDataFeature(ctx) {
     if (!authToken) return;
     const payload = await apiRequest("/documents/pending", { token: authToken });
     setPendingDocs(payload.data || []);
+  };
+
+  const loadAllUploadedDocuments = async (authToken = token) => {
+    if (!authToken) {
+      if (setAdminDocuments) setAdminDocuments([]);
+      return;
+    }
+    const payload = await apiRequest("/documents/all-uploaded", { token: authToken });
+    if (setAdminDocuments) {
+      setAdminDocuments(Array.isArray(payload.data) ? payload.data : []);
+    }
   };
 
   const loadNotifications = async () => {
@@ -57,6 +73,7 @@ export function createDataFeature(ctx) {
     loadHomeDocuments,
     loadMyDocuments,
     loadPendingDocuments,
+    loadAllUploadedDocuments,
     loadNotifications,
   };
 }

@@ -41,10 +41,21 @@ function AppController() {
 
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(() => {
-    const raw = localStorage.getItem("user");
-    return raw ? JSON.parse(raw) : null;
+    try {
+      const raw = localStorage.getItem("user");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      localStorage.removeItem("user");
+      return null;
+    }
   });
-  const [activeTab, setActiveTabState] = useState(queryTab || (queryDocId ? "reader" : "home"));
+  const [activeTab, setActiveTabState] = useState(() => {
+    const preferredTab = queryTab || (queryDocId ? "reader" : "home");
+    if (preferredTab === "reader" && !queryDocId) {
+      return "home";
+    }
+    return preferredTab;
+  });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const [loginForm, setLoginForm] = useState(initialLogin);
@@ -54,7 +65,7 @@ function AppController() {
   const [forgotNewPassword, setForgotNewPassword] = useState("");
   const [forgotConfirmPassword, setForgotConfirmPassword] = useState("");
   const [forgotOtpPreview, setForgotOtpPreview] = useState("");
-  const [authMode, setAuthModeState] = useState(queryAuth || "login");
+  const [authMode, setAuthModeState] = useState(queryAuth || "guest");
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
   const [showRegisterConfirmPassword, setShowRegisterConfirmPassword] = useState(false);
@@ -64,6 +75,7 @@ function AppController() {
   const [otpCode, setOtpCode] = useState("");
   const [otpPreview, setOtpPreview] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [isRegisterOtpSending, setIsRegisterOtpSending] = useState(false);
 
   const [categories, setCategories] = useState([]);
   const [docs, setDocs] = useState([]);
@@ -71,6 +83,9 @@ function AppController() {
   const [pendingDocs, setPendingDocs] = useState([]);
   const [reportedDocs, setReportedDocs] = useState([]);
   const [pendingPointEvents, setPendingPointEvents] = useState([]);
+  const [pendingComments, setPendingComments] = useState([]);
+  const [moderationStats, setModerationStats] = useState(null);
+  const [moderationTimeline, setModerationTimeline] = useState([]);
   const [myDocs, setMyDocs] = useState([]);
   const [pointSummary, setPointSummary] = useState(null);
   const [pointTransactions, setPointTransactions] = useState([]);
@@ -78,6 +93,7 @@ function AppController() {
   const [pointPolicy, setPointPolicy] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [adminUsers, setAdminUsers] = useState([]);
+  const [adminDocuments, setAdminDocuments] = useState([]);
   const [duplicateByDocId, setDuplicateByDocId] = useState({});
   const [previewDoc, setPreviewDoc] = useState(null);
   const [previewComments, setPreviewComments] = useState([]);
@@ -90,6 +106,13 @@ function AppController() {
   const [qaFilter, setQaFilter] = useState("all");
   const [qaRatedSessionMap, setQaRatedSessionMap] = useState({});
   const [recentlyOpenedDocIds, setRecentlyOpenedDocIds] = useState([]);
+  const [totalMyDocUpvotes, setTotalMyDocUpvotes] = useState(0);
+  const [moderationFocus, setModerationFocus] = useState({
+    documentId: null,
+    commentId: null,
+    qaSessionId: null,
+    pointEventId: null,
+  });
 
   const [docFilter, setDocFilter] = useState({
     keyword: "",
@@ -113,9 +136,10 @@ function AppController() {
   const [isUploadSubmitting, setIsUploadSubmitting] = useState(false);
   const [pendingActionCount, setPendingActionCount] = useState(0);
   const topicPickerRef = useRef(null);
+  const upvoteSyncSignatureRef = useRef("");
+  const actionLocksRef = useRef(new Set());
 
   const isModerator = hasModeratorRole(user?.role);
-  const visibleTabs = user?.role ? roleTabs[user.role] || roleTabs.user : [];
 
   const registerPasswordStrength = getPasswordStrength(registerForm.password);
   const forgotPasswordStrength = getPasswordStrength(forgotNewPassword);
@@ -132,6 +156,9 @@ function AppController() {
     setPendingDocs([]);
     setReportedDocs([]);
     setPendingPointEvents([]);
+    setPendingComments([]);
+    setModerationStats(null);
+    setModerationTimeline([]);
     setPointSummary(null);
     setPointTransactions([]);
     setMyPointEvents([]);
@@ -139,6 +166,7 @@ function AppController() {
     setDuplicateByDocId({});
     setNotifications([]);
     setAdminUsers([]);
+    setAdminDocuments([]);
     setDocEngagementById({});
     setPreviewComments([]);
     setQaSessions([]);
@@ -146,6 +174,12 @@ function AppController() {
     setQaMessages([]);
     setQaFilter("all");
     setQaRatedSessionMap({});
+    setModerationFocus({
+      documentId: null,
+      commentId: null,
+      qaSessionId: null,
+      pointEventId: null,
+    });
     setCourseInput("");
     setShowCourseDropdown(false);
     setTagInput("");
@@ -153,6 +187,7 @@ function AppController() {
     setStatus("");
     setError("");
     setIsUploadSubmitting(false);
+    setIsRegisterOtpSending(false);
   };
 
   const setSession = (nextToken, nextUser) => {
@@ -237,8 +272,8 @@ function AppController() {
         current.searchParams.delete("sessionId");
         changed = true;
       }
-      if (current.searchParams.get("auth") !== "login") {
-        current.searchParams.set("auth", "login");
+      if (current.searchParams.get("auth") !== "guest") {
+        current.searchParams.set("auth", "guest");
         changed = true;
       }
       if (changed) {
@@ -253,6 +288,8 @@ function AppController() {
     setError("");
     setStatus("");
   };
+
+  const requireAuthMessage = "Bạn chưa đăng nhập, vui lòng đăng nhập hoặc đăng ký tài khoản.";
 
   const getRecentReadStorageKey = (userId) => `neushare_recent_docs_${Number(userId || 0)}`;
 
@@ -279,6 +316,27 @@ function AppController() {
   };
 
   const setActiveTab = (nextTab, options = {}) => {
+    if (!token && nextTab === "upload") {
+      setStatus("");
+      setError(requireAuthMessage);
+      return;
+    }
+    if (nextTab === "categories" && !hasModeratorRole(user?.role)) {
+      setStatus("");
+      setError("Only moderator/admin can access course manager.");
+      return;
+    }
+    if (nextTab === "users" && String(user?.role || "").toLowerCase() !== "admin") {
+      setStatus("");
+      setError("Only admin can access user management.");
+      return;
+    }
+    if (nextTab === "documents" && !hasModeratorRole(user?.role)) {
+      setStatus("");
+      setError("Only moderator/admin can access documents management.");
+      return;
+    }
+
     const {
       docId = null,
       replace = false,
@@ -310,6 +368,7 @@ function AppController() {
   const normalizeDocumentForViewer = (doc) => {
     if (!doc) return doc;
 
+    const isGuest = !token;
     const role = user?.role || "user";
     const currentPoints = Number(user?.points || 0);
     const currentUserId = Number(user?.userId || 0);
@@ -330,6 +389,34 @@ function AppController() {
     const requiredPoints = Number.isFinite(Number(doc?.requiredPoints))
       ? Number(doc.requiredPoints)
       : 30;
+    if (isGuest) {
+      return {
+        ...doc,
+        ownerName: doc.ownerName || doc.authorName || doc.uploadedByName || "NeuShare member",
+        currentUserId: 0,
+        currentUserName: "Guest",
+        isOwner: false,
+        requiredPoints,
+        isLockedForPoints: true,
+        previewPageLimit: 5,
+        canFullView: false,
+        canDownload: false,
+        points: 0,
+        tier: "guest_locked",
+        accessState: "locked",
+        accessReason: requireAuthMessage,
+        dailyViewLimit: null,
+        todayFullViewCount: 0,
+        viewsRemainingToday: null,
+        lockedOverlay: {
+          title: "Bạn chưa đăng nhập",
+          message: requireAuthMessage,
+          helperText: "Đăng nhập hoặc tạo tài khoản để mở toàn bộ nội dung tài liệu.",
+          requiredPoints,
+        },
+      };
+    }
+
     const canFullView = canBypass || currentPoints >= requiredPoints;
     const canDownload = canBypass || currentPoints >= 40;
 
@@ -338,6 +425,7 @@ function AppController() {
       ownerName: doc.ownerName || doc.authorName || doc.uploadedByName || "NeuShare member",
       currentUserId,
       currentUserName: user?.name || "",
+      currentUserRole: user?.role || "user",
       isOwner,
       requiredPoints,
       isLockedForPoints: !canFullView,
@@ -349,6 +437,7 @@ function AppController() {
       dailyViewLimit: null,
       todayFullViewCount: 0,
       viewsRemainingToday: null,
+      previewPageLimit: null,
       lockedOverlay: null,
     };
   };
@@ -366,23 +455,60 @@ function AppController() {
   };
 
   const call = async (fn, options = {}) => {
-    const { clear = true } = options;
+    const { clear = true, actionKey = "" } = options;
+    const normalizedActionKey = String(actionKey || "").trim();
+
+    if (normalizedActionKey && actionLocksRef.current.has(normalizedActionKey)) {
+      return false;
+    }
+
+    if (normalizedActionKey) {
+      actionLocksRef.current.add(normalizedActionKey);
+    }
+
     if (clear) clearFeedback();
     setPendingActionCount((prev) => prev + 1);
     try {
       await fn();
+      return true;
     } catch (e) {
       const message = e?.message || "Unknown error";
       if (message.toLowerCase().includes("jwt expired")) {
         clearSession();
         setAuthMode("login");
         setError("Session expired. Please login again.");
-        return;
+        return false;
       }
       setError(message);
+      return false;
     } finally {
+      if (normalizedActionKey) {
+        actionLocksRef.current.delete(normalizedActionKey);
+      }
       setPendingActionCount((prev) => Math.max(0, prev - 1));
     }
+  };
+
+  const loadModerationOverview = async () => {
+    if (!token || !hasModeratorRole(user?.role)) {
+      setModerationStats(null);
+      setModerationTimeline([]);
+      return;
+    }
+
+    const [statsPayload, timelinePayload] = await Promise.all([
+      apiRequest("/moderation/stats", { token }),
+      apiRequest("/moderation/timeline", { token, query: { limit: 10, offset: 0 } }),
+    ]);
+
+    setModerationStats(statsPayload?.data || null);
+    setModerationTimeline(
+      Array.isArray(timelinePayload?.data?.rows)
+        ? timelinePayload.data.rows
+        : Array.isArray(timelinePayload?.data)
+          ? timelinePayload.data
+          : [],
+    );
   };
 
   const {
@@ -391,6 +517,7 @@ function AppController() {
     loadHomeDocuments,
     loadMyDocuments,
     loadPendingDocuments,
+    loadAllUploadedDocuments,
     loadNotifications,
   } =
     createDataFeature({
@@ -402,6 +529,7 @@ function AppController() {
       setHomeDocs,
       setMyDocs,
       setPendingDocs,
+      setAdminDocuments,
       setNotifications,
     });
 
@@ -410,16 +538,69 @@ function AppController() {
     const documentId = Number(normalizedDoc?.documentId || 0);
     pushRecentlyOpenedDoc(documentId);
 
-    if (!token || !Number.isInteger(documentId) || documentId <= 0) {
+    if (!Number.isInteger(documentId) || documentId <= 0) {
       createOpenPreview(setPreviewDoc)({
         ...normalizedDoc,
         isLoading: false,
       });
-      setActiveTab("reader");
+      setActiveTab("reader", { docId: documentId || null });
       return;
     }
 
-    setActiveTab("reader");
+    if (!token) {
+      setActiveTab("reader", { docId: documentId });
+      createOpenPreview(setPreviewDoc)({
+        ...normalizedDoc,
+        previewUrl: "",
+        previewReason: "Preparing your document preview...",
+        isLoading: true,
+      });
+
+      clearFeedback();
+
+      try {
+        const previewPayload = await apiRequest(`/documents/${documentId}/preview`);
+        const previewData = previewPayload?.data || {};
+        createOpenPreview(setPreviewDoc)({
+          ...normalizedDoc,
+          accessState: previewData.accessState || "guest_locked",
+          requiredPoints:
+            Number(previewData.lockedOverlay?.requiredPoints || previewData.requiredPoints) ||
+            normalizedDoc.requiredPoints,
+          isLockedForPoints: true,
+          canFullView: false,
+          canDownload: false,
+          canPreview: true,
+          points: 0,
+          tier: previewData.tier || "guest_locked",
+          accessReason: previewData.reason || normalizedDoc.accessReason || "",
+          lockedOverlay: previewData.lockedOverlay || normalizedDoc.lockedOverlay || null,
+          previewPageLimit: Number(previewData.previewPageLimit || 5),
+          viewer: previewData.viewer || null,
+          viewerStatus: previewData.viewer?.status || "",
+          viewerKind: previewData.viewer?.viewerKind || null,
+          securePreviewUrl: previewData.viewer?.previewViewerUrl
+            ? `${API_ORIGIN}${previewData.viewer.previewViewerUrl}`
+            : "",
+          previewReason: previewData.viewer?.reason || normalizedDoc.previewReason || "",
+          isLoading: false,
+        });
+      } catch (e) {
+        const message = e?.message || "Unknown error";
+        setError(message);
+        createOpenPreview(setPreviewDoc)({
+          ...normalizedDoc,
+          previewUrl: "",
+          previewReason: message,
+          isLockedForPoints: true,
+          previewPageLimit: 5,
+          isLoading: false,
+        });
+      }
+      return;
+    }
+
+    setActiveTab("reader", { docId: documentId });
     createOpenPreview(setPreviewDoc)({
       ...normalizedDoc,
       previewUrl: "",
@@ -453,12 +634,17 @@ function AppController() {
           ? Number(accessData.viewsRemainingToday)
           : null,
         lockedOverlay: accessData.lockedOverlay || null,
+        previewPageLimit: Number.isFinite(Number(accessData.previewPageLimit))
+          ? Number(accessData.previewPageLimit)
+          : null,
         viewer: accessData.viewer || null,
-        securePreviewUrl:
-          accessData.canFullView && accessData.viewer?.viewerUrl
+        securePreviewUrl: accessData.viewer?.previewViewerUrl
+          ? `${API_ORIGIN}${accessData.viewer.previewViewerUrl}`
+          : accessData.canFullView && accessData.viewer?.viewerUrl
             ? `${API_ORIGIN}${accessData.viewer.viewerUrl}?token=${encodeURIComponent(token)}`
             : "",
         viewerStatus: accessData.viewer?.status || "",
+        viewerKind: accessData.viewer?.viewerKind || null,
         previewReason: accessData.viewer?.reason || normalizedDoc.previewReason || "",
         isLoading: false,
       };
@@ -479,8 +665,10 @@ function AppController() {
               ? `${API_ORIGIN}${fullViewData.viewer.viewerUrl}?token=${encodeURIComponent(token)}`
               : policyDoc.securePreviewUrl,
           viewerStatus: fullViewData.viewer?.status || policyDoc.viewerStatus,
+          viewerKind: fullViewData.viewer?.viewerKind || policyDoc.viewerKind || null,
           previewReason: fullViewData.viewer?.reason || policyDoc.previewReason || "",
           isLockedForPoints: false,
+          previewPageLimit: null,
           isLoading: false,
         });
         return;
@@ -621,7 +809,7 @@ function AppController() {
           ),
         );
       }
-    });
+    }, { actionKey: `qa:open:${sessionId}` });
   };
 
   const createQaSession = async (documentId, initialMessage = "") => {
@@ -645,7 +833,7 @@ function AppController() {
       } else {
         setActiveTab("qa");
       }
-    });
+    }, { actionKey: `qa:create:${numericId}` });
   };
 
   const sendQaMessage = async (sessionId, message) => {
@@ -662,7 +850,7 @@ function AppController() {
       setActiveQaSession(latest?.data?.session || activeQaSession);
       setQaMessages(Array.isArray(latest?.data?.messages) ? latest.data.messages : []);
       await loadQaSessions();
-    });
+    }, { actionKey: `qa:send:${numericId}` });
   };
 
   const closeQaSession = async (sessionId) => {
@@ -677,7 +865,7 @@ function AppController() {
       setActiveQaSession(payload?.data || null);
       await loadQaSessions();
       setStatus("Q&A session closed.");
-    });
+    }, { actionKey: `qa:close:${numericId}` });
   };
 
   const rateQaSession = async (sessionId, stars, feedback = "") => {
@@ -833,11 +1021,19 @@ function AppController() {
     setDocEngagementById,
   });
 
-  const { loadCommentsByDocument, createComment, createReply } = createCommentFeature({
+  const {
+    loadCommentsByDocument,
+    createComment,
+    createReply,
+    loadPendingCommentsForModeration,
+    reviewPendingComment,
+    hideCommentForModeration,
+  } = createCommentFeature({
     token,
     call,
     setStatus,
     setPreviewComments,
+    setPendingComments,
   });
 
   const {
@@ -852,6 +1048,8 @@ function AppController() {
     call,
     loginForm,
     registerForm,
+    resendCooldown,
+    isRegisterOtpSending,
     forgotEmail,
     otpEmail,
     otpCode,
@@ -866,6 +1064,7 @@ function AppController() {
     setOtpEmail,
     setOtpPreview,
     setResendCooldown,
+    setIsRegisterOtpSending,
     setRegisterForm,
     setOtpCode,
     setForgotEmail,
@@ -883,8 +1082,11 @@ function AppController() {
       const params = getUrlSearchParams();
       const nextDocId = params.get("docId");
       const nextSessionId = params.get("sessionId");
-      const nextTab = params.get("tab") || (nextDocId ? "reader" : "home");
-      const nextAuthMode = params.get("auth") || "login";
+      let nextTab = params.get("tab") || (nextDocId ? "reader" : "home");
+      if (nextTab === "reader" && !nextDocId) {
+        nextTab = "home";
+      }
+      const nextAuthMode = params.get("auth") || "guest";
 
       setActiveTabState(nextTab);
       setAuthModeState(nextAuthMode);
@@ -903,6 +1105,33 @@ function AppController() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "reader" || previewDoc) return;
+    const params = getUrlSearchParams();
+    const readerDocId = Number(params.get("docId"));
+    if (!Number.isInteger(readerDocId) || readerDocId <= 0) {
+      setActiveTab("home", { replace: true });
+    }
+  }, [activeTab, previewDoc]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab !== "categories") return;
+    if (hasModeratorRole(user?.role)) return;
+    setActiveTab("home", { replace: true });
+  }, [activeTab, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab !== "users") return;
+    if (String(user?.role || "").toLowerCase() === "admin") return;
+    setActiveTab("home", { replace: true });
+  }, [activeTab, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab !== "documents") return;
+    if (hasModeratorRole(user?.role)) return;
+    setActiveTab("home", { replace: true });
+  }, [activeTab, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!window.history || !("scrollRestoration" in window.history)) return undefined;
@@ -936,7 +1165,7 @@ function AppController() {
 
   useEffect(() => {
     call(async () => {
-      const tasks = [loadCategories(), loadDocuments(), loadHomeDocuments()];
+      const tasks = [loadCategories(), loadHomeDocuments()];
       if (token) {
         tasks.push(refreshCurrentUser());
         tasks.push(loadMyDocuments());
@@ -947,9 +1176,12 @@ function AppController() {
           tasks.push(loadAdminUsers());
         }
         if (hasModeratorRole(user?.role)) {
+          tasks.push(loadAllUploadedDocuments(token));
           tasks.push(loadPendingDocuments(token));
           tasks.push(loadReportedDocuments(token));
           tasks.push(loadPendingPointEvents());
+          tasks.push(loadPendingCommentsForModeration());
+          tasks.push(loadModerationOverview());
         }
       }
 
@@ -966,6 +1198,8 @@ function AppController() {
         loadPendingDocuments(token),
         loadReportedDocuments(token),
         loadPendingPointEvents(),
+        loadPendingCommentsForModeration(),
+        loadModerationOverview(),
       ]);
     });
   }, [activeTab, token, isModerator]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -973,7 +1207,14 @@ function AppController() {
   useEffect(() => {
     if (activeTab !== "users" || !token || user?.role !== "admin") return;
     call(async () => {
-      await loadAdminUsers();
+      await Promise.all([loadAdminUsers(), loadAllUploadedDocuments(token), loadModerationOverview()]);
+    });
+  }, [activeTab, token, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab !== "documents" || !token || !hasModeratorRole(user?.role)) return;
+    call(async () => {
+      await Promise.all([loadAllUploadedDocuments(token), loadModerationOverview(), loadPendingDocuments(token)]);
     });
   }, [activeTab, token, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -985,19 +1226,20 @@ function AppController() {
   useEffect(() => {
     if (activeTab !== "qa" || !token) return;
     void loadQaSessions();
-  }, [activeTab, token, qaFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeTab, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!queryDocId || !token) return;
     const targetId = Number(queryDocId);
     if (!Number.isFinite(targetId)) return;
+    if (Number(previewDoc?.documentId) === targetId) return;
 
     const pool = [...docs, ...myDocs, ...pendingDocs, ...reportedDocs, ...categoryDocs];
     const doc = pool.find((item) => Number(item?.documentId) === targetId);
     if (!doc) return;
 
     openPreview(normalizeDocumentForViewer(doc));
-  }, [queryDocId, token, docs, myDocs, pendingDocs, reportedDocs, categoryDocs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queryDocId, token, docs, myDocs, pendingDocs, reportedDocs, categoryDocs, previewDoc?.documentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (activeTab !== "qa" || !querySessionId || !token) return;
@@ -1072,30 +1314,142 @@ function AppController() {
     const onMouseDown = (e) => {
       if (!topicPickerRef.current) return;
       if (!topicPickerRef.current.contains(e.target)) {
-        setShowTopicDropdown(false);
+        setShowCourseDropdown(false);
       }
     };
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
-  }, []);
+  }, [setShowCourseDropdown]);
+
+  useEffect(() => {
+    // Keep navigation clean: stale errors from a previous tab should not bleed into new tab.
+    setError("");
+  }, [activeTab]);
 
   useEffect(() => {
     if (!status) return;
-    if (String(status).trim().toLowerCase() !== "login successful.") return;
+    const normalizedStatus = String(status).trim().toLowerCase();
+    const isLoginSuccess = normalizedStatus === "login successful.";
+    const isGenericSuccess =
+      normalizedStatus.includes("successful") ||
+      normalizedStatus.includes("submitted") ||
+      normalizedStatus.includes("closed") ||
+      normalizedStatus.includes("started");
+    if (!isLoginSuccess && !isGenericSuccess) return;
 
     const timerId = setTimeout(() => {
       setStatus("");
-    }, 2000);
+    }, isLoginSuccess ? 2000 : 3000);
 
     return () => clearTimeout(timerId);
   }, [status]);
 
+  useEffect(() => {
+    let isCancelled = false;
+
+    const syncMyDocumentUpvotes = async () => {
+      if (!token) {
+        upvoteSyncSignatureRef.current = "";
+        setTotalMyDocUpvotes(0);
+        return;
+      }
+
+      const docIds = [...new Set(myDocs.map((doc) => Number(doc?.documentId || 0)).values())].filter(
+        (id) => Number.isInteger(id) && id > 0,
+      );
+      const likeNotificationSignature = (Array.isArray(notifications) ? notifications : [])
+        .filter((item) => String(item?.type || "").toLowerCase().includes("like"))
+        .slice(0, 20)
+        .map((item) => Number(item?.notificationId || 0))
+        .filter((id) => Number.isInteger(id) && id > 0)
+        .join(",");
+      const signature = `${docIds.join(",")}|${likeNotificationSignature}`;
+      if (signature === upvoteSyncSignatureRef.current) {
+        return;
+      }
+      upvoteSyncSignatureRef.current = signature;
+
+      if (docIds.length === 0) {
+        if (!isCancelled) {
+          setTotalMyDocUpvotes(0);
+        }
+        return;
+      }
+
+      const results = await Promise.allSettled(
+        docIds.map(async (documentId) => {
+          const payload = await apiRequest(`/documents/${documentId}/engagement`, { token });
+          return {
+            documentId,
+            likeCount: Number(payload?.data?.likeCount || 0),
+            dislikeCount: Number(payload?.data?.dislikeCount || 0),
+            currentReaction: payload?.data?.currentReaction ?? null,
+            isSaved: Boolean(payload?.data?.isSaved),
+          };
+        }),
+      );
+
+      if (isCancelled) return;
+
+      let sum = 0;
+      const engagementPatch = {};
+      results.forEach((result) => {
+        if (result.status !== "fulfilled") return;
+        const item = result.value;
+        sum += Number(item.likeCount || 0);
+        engagementPatch[item.documentId] = {
+          likeCount: item.likeCount,
+          dislikeCount: item.dislikeCount,
+          currentReaction: item.currentReaction,
+          isSaved: item.isSaved,
+        };
+      });
+
+      setDocEngagementById((prev) => ({
+        ...prev,
+        ...engagementPatch,
+      }));
+      setTotalMyDocUpvotes(sum);
+    };
+
+    void syncMyDocumentUpvotes();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [token, myDocs, notifications]);
+
+  const pendingStatuses = new Set([
+    "pending",
+    "pending_review",
+    "under_review",
+    "in_review",
+    "awaiting_moderation",
+  ]);
+  const pendingUploadsCount = token
+    ? myDocs.filter((doc) => {
+        const statusValue = String(
+          doc?.status || doc?.approvalStatus || doc?.moderationStatus || "",
+        )
+          .trim()
+          .toLowerCase();
+        return pendingStatuses.has(statusValue);
+      }).length
+    : 0;
+
   const stats = {
-    followers: 0,
-    uploads: myDocs.length,
-    upvotes: myDocs.reduce((sum, doc) => sum + Number(doc?.likeCount || 0), 0),
+    uploads: token ? myDocs.length : 0,
+    pending: pendingUploadsCount,
+    upvotes: token ? totalMyDocUpvotes : 0,
     points: Number(user?.points || 0),
   };
+
+  const isGuestDashboard = !token && authMode === "guest";
+  const dashboardUser = isGuestDashboard
+    ? { userId: 0, name: "Guest", role: "user", points: 0 }
+    : user;
+  const visibleTabsForDashboard =
+    dashboardUser?.role ? roleTabs[dashboardUser.role] || roleTabs.user : roleTabs.user;
 
   const findDocById = (documentId) => {
     const pool = [...docs, ...myDocs, ...pendingDocs, ...reportedDocs, ...categoryDocs];
@@ -1135,6 +1489,195 @@ function AppController() {
     await updateDocumentSavedState(documentId, !isSaved);
   };
 
+  const reviewCommentPointFromPreview = async (comment, points, note = "") => {
+    const role = String(user?.role || "").toLowerCase();
+    if (!["admin", "moderator"].includes(role)) {
+      setStatus("");
+      setError("Only moderator/admin can review comment points.");
+      return;
+    }
+
+    const commentId = Number(comment?.commentId || 0);
+    if (!Number.isInteger(commentId) || commentId <= 0) return;
+
+    const parsedPoints = Number(points);
+    if (!Number.isInteger(parsedPoints) || parsedPoints < 10 || parsedPoints > 15) {
+      setStatus("");
+      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 10-15.");
+      return;
+    }
+
+    const relatedEvents = (Array.isArray(pendingPointEvents) ? pendingPointEvents : []).filter(
+      (event) =>
+        Number(event?.commentId || 0) === commentId &&
+        String(event?.status || "").toLowerCase() === "pending",
+    );
+
+    if (!relatedEvents.length) {
+      setStatus("");
+      setError("Bình luận này chưa có point event pending để duyệt.");
+      return;
+    }
+
+    const preferredEvent =
+      relatedEvents.find((event) => String(event?.eventType || "").toLowerCase() === "comment_given") ||
+      relatedEvents[0];
+
+    const normalizedNote = String(note || "").trim();
+    await reviewPointEvent(preferredEvent.eventId, {
+      decision: "approved",
+      pointDelta: parsedPoints,
+      note: normalizedNote || `Moderator scored comment #${commentId} with ${parsedPoints} points.`,
+    });
+  };
+
+  const reviewCommentPointFromPreviewV2 = async (comment, points, note = "") => {
+    const role = String(user?.role || "").toLowerCase();
+    if (!["admin", "moderator"].includes(role)) {
+      setStatus("");
+      setError("Only moderator/admin can review comment points.");
+      return;
+    }
+
+    const commentId = Number(comment?.commentId || 0);
+    if (!Number.isInteger(commentId) || commentId <= 0) return;
+
+    const parsedPoints = Number(points);
+    if (!Number.isInteger(parsedPoints) || parsedPoints < 10 || parsedPoints > 15) {
+      setStatus("");
+      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 10-15.");
+      return;
+    }
+
+    const relatedPendingEvents = (Array.isArray(pendingPointEvents) ? pendingPointEvents : []).filter(
+      (event) =>
+        Number(event?.commentId || 0) === commentId &&
+        String(event?.status || "").toLowerCase() === "pending",
+    );
+
+    const preferredPendingEvent =
+      relatedPendingEvents.find(
+        (event) => String(event?.eventType || "").toLowerCase() === "comment_given",
+      ) || relatedPendingEvents[0];
+
+    const fallbackExistingEventId = Number(comment?.pointEventId || 0);
+    const targetEventId =
+      Number(preferredPendingEvent?.eventId || 0) > 0
+        ? Number(preferredPendingEvent.eventId)
+        : fallbackExistingEventId > 0
+          ? fallbackExistingEventId
+          : 0;
+
+    if (!targetEventId) {
+      setStatus("");
+      setError(
+        "Bình luận này chưa có point event để duyệt/chỉnh. Hãy duyệt comment trước để tạo point event.",
+      );
+      return;
+    }
+
+    const normalizedNote = String(note || "").trim();
+    await reviewPointEvent(targetEventId, {
+      decision: "approved",
+      pointDelta: parsedPoints,
+      note: normalizedNote || `Moderator scored comment #${commentId} with ${parsedPoints} points.`,
+    });
+
+    const previewDocumentId = Number(previewDoc?.documentId || comment?.documentId || 0);
+    if (previewDocumentId > 0) {
+      await loadCommentsByDocument(previewDocumentId);
+    }
+  };
+
+  const reviewCommentPointFromPreviewV3 = async (comment, points, note = "") => {
+    const role = String(user?.role || "").toLowerCase();
+    if (!["admin", "moderator"].includes(role)) {
+      setStatus("");
+      setError("Only moderator/admin can review comment points.");
+      return;
+    }
+
+    const commentId = Number(comment?.commentId || 0);
+    if (!Number.isInteger(commentId) || commentId <= 0) return;
+
+    const parsedPoints = Number(points);
+    if (!Number.isInteger(parsedPoints) || parsedPoints < 10 || parsedPoints > 15) {
+      setStatus("");
+      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 10-15.");
+      return;
+    }
+
+    const relatedPendingEvents = (Array.isArray(pendingPointEvents) ? pendingPointEvents : []).filter(
+      (event) =>
+        Number(event?.commentId || 0) === commentId &&
+        String(event?.status || "").toLowerCase() === "pending",
+    );
+
+    const preferredPendingEvent =
+      relatedPendingEvents.find(
+        (event) => String(event?.eventType || "").toLowerCase() === "comment_given",
+      ) || relatedPendingEvents[0];
+
+    let targetEventId = Number(preferredPendingEvent?.eventId || 0);
+    if (!targetEventId) {
+      const existingEventId = Number(comment?.pointEventId || 0);
+      if (existingEventId > 0) {
+        targetEventId = existingEventId;
+      }
+    }
+
+    if (!targetEventId) {
+      const ensuredPayload = await apiRequest(`/comments/${commentId}/point-events/ensure`, {
+        method: "POST",
+        token,
+      });
+      await loadPendingPointEvents();
+
+      const ensuredPrimaryId = Number(ensuredPayload?.data?.commenterPointEvent?.eventId || 0);
+      const ensuredIds = Array.isArray(ensuredPayload?.data?.pointEventIds)
+        ? ensuredPayload.data.pointEventIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+        : [];
+
+      targetEventId =
+        ensuredPrimaryId > 0
+          ? ensuredPrimaryId
+          : ensuredIds.find((id) => Number.isInteger(id) && id > 0) || 0;
+    }
+
+    if (!targetEventId) {
+      setStatus("");
+      setError("Không thể tạo point event cho bình luận này. Vui lòng thử lại.");
+      return;
+    }
+
+    const normalizedNote = String(note || "").trim();
+    await reviewPointEvent(targetEventId, {
+      decision: "approved",
+      pointDelta: parsedPoints,
+      note: normalizedNote || `Moderator scored comment #${commentId} with ${parsedPoints} points.`,
+    });
+
+    const previewDocumentId = Number(previewDoc?.documentId || comment?.documentId || 0);
+    if (previewDocumentId > 0) {
+      await loadCommentsByDocument(previewDocumentId);
+    }
+  };
+
+  const hideCommentFromPreview = async (comment) => {
+    const role = String(user?.role || "").toLowerCase();
+    if (!["admin", "moderator"].includes(role)) {
+      setStatus("");
+      setError("Only moderator/admin can hide comments.");
+      return;
+    }
+
+    const commentId = Number(comment?.commentId || 0);
+    const documentId = Number(comment?.documentId || previewDoc?.documentId || 0);
+    if (!Number.isInteger(commentId) || commentId <= 0) return;
+
+    await hideCommentForModeration(commentId, Number.isInteger(documentId) && documentId > 0 ? documentId : null);
+  };
+
   const downloadPreviewDocument = async (documentId, previewDocState) => {
     const numericId = Number(documentId || 0);
     if (!token || !Number.isInteger(numericId) || numericId <= 0) return;
@@ -1157,7 +1700,7 @@ function AppController() {
         window.open(nextFileUrl, "_blank", "noopener,noreferrer");
       }
       await refreshCurrentUser();
-    });
+    }, { actionKey: `doc:download:${numericId}` });
   };
 
   const downloadPreviewDocumentWithPolicyCheck = async (documentId, previewDocState) => {
@@ -1217,7 +1760,7 @@ function AppController() {
       }
 
       await refreshCurrentUser();
-    });
+    }, { actionKey: `doc:download-protected:${numericId}` });
   };
 
   const parseNotificationMetadata = (rawMetadata) => {
@@ -1241,20 +1784,52 @@ function AppController() {
 
       const type = String(notification.type || "").toLowerCase();
 
-      if (
-        type.includes("point") ||
-        type.includes("document_approved") ||
+      const metadata = parseNotificationMetadata(notification.metadata);
+      const documentId = Number(metadata?.documentId || metadata?.document?.documentId || 0);
+      const sessionId = Number(metadata?.sessionId || metadata?.qaSessionId || 0);
+      const commentId = Number(
+        metadata?.commentId || metadata?.replyCommentId || metadata?.target?.id || 0,
+      );
+      const pointEventId = Number(metadata?.pointEventId || metadata?.eventId || 0);
+      const isModerationUser = hasModeratorRole(user?.role);
+      const isCommentFlow =
+        type.includes("comment") ||
+        String(metadata?.action || "").toLowerCase().includes("comment");
+      const isQaRatingFlow =
+        type.includes("qa_rating") ||
         type.includes("qa_session_rated") ||
-        type.includes("qa_rating")
-      ) {
+        type.includes("qa_rating_pending_review") ||
+        String(metadata?.action || "").toLowerCase().includes("qa.rating");
+      const isModerationFlow =
+        type.includes("moderation") ||
+        type.includes("report") ||
+        type.includes("plagiarism") ||
+        type.includes("point") ||
+        isCommentFlow ||
+        isQaRatingFlow;
+
+      if (isModerationUser && isModerationFlow) {
+        setModerationFocus({
+          documentId: Number.isInteger(documentId) && documentId > 0 ? documentId : null,
+          commentId: Number.isInteger(commentId) && commentId > 0 ? commentId : null,
+          qaSessionId: Number.isInteger(sessionId) && sessionId > 0 ? sessionId : null,
+          pointEventId: Number.isInteger(pointEventId) && pointEventId > 0 ? pointEventId : null,
+        });
+        setActiveTab("moderation");
+        await Promise.allSettled([
+          loadPendingDocuments(token),
+          loadReportedDocuments(token),
+          loadPendingPointEvents(),
+          loadPendingCommentsForModeration(),
+        ]);
+        return;
+      }
+
+      if (type.includes("point") || type.includes("document_approved")) {
         setActiveTab("points");
         await loadAllPointData();
         return;
       }
-
-      const metadata = parseNotificationMetadata(notification.metadata);
-      const documentId = Number(metadata?.documentId || metadata?.document?.documentId || 0);
-      const sessionId = Number(metadata?.sessionId || metadata?.qaSessionId || 0);
 
       if (Number.isInteger(sessionId) && sessionId > 0) {
         await loadQaSessions();
@@ -1284,7 +1859,7 @@ function AppController() {
       } else {
         setActiveTab("notifications");
       }
-    });
+    }, { actionKey: `notification:open:${notification.notificationId}` });
   };
 
   const topicSuggestions = categories.filter((c) => {
@@ -1321,6 +1896,7 @@ function AppController() {
     otpPreview,
     forgotOtpPreview,
     resendCooldown,
+    isRegisterOtpSending,
     showLoginPassword,
     setShowLoginPassword,
     showRegisterPassword,
@@ -1350,9 +1926,9 @@ function AppController() {
   };
 
   const dashboardShellProps = {
-    user,
+    user: dashboardUser,
     stats,
-    visibleTabs,
+    visibleTabs: visibleTabsForDashboard,
     activeTab,
     setActiveTab,
     isSidebarCollapsed,
@@ -1404,17 +1980,27 @@ function AppController() {
     pendingDocs,
     reportedDocs,
     pendingPointEvents,
+    pendingComments,
+    moderationStats,
+    moderationTimeline,
+    moderationFocus,
+    loadModerationOverview,
     resolveReportedDocument,
     reviewPointEvent,
+    reviewPendingComment,
+    hideCommentForModeration,
     loadDuplicateCandidates,
     moderateDocument,
     lockUnlockDelete,
     duplicateByDocId,
     notifications,
     adminUsers,
+    adminDocuments,
+    loadAdminUsers,
     changeUserRole,
     setUserActiveStatus,
     deleteUserAccount,
+    loadAllUploadedDocuments,
     markRead,
     openFromNotification,
     handleCreateCategory,
@@ -1446,26 +2032,59 @@ function AppController() {
     },
     previewComments,
     createCommentForPreview: async (documentId, content) => {
+      if (!token) {
+        setStatus("");
+        setError(requireAuthMessage);
+        return;
+      }
       await createComment(documentId, content);
     },
     createReplyForPreview: async (parentCommentId, content, documentId) => {
+      if (!token) {
+        setStatus("");
+        setError(requireAuthMessage);
+        return;
+      }
       await createReply(parentCommentId, content, documentId);
     },
+    onReviewCommentPointFromPreview: reviewCommentPointFromPreviewV3,
+    onHideCommentFromPreview: hideCommentFromPreview,
     getDocReactionCounts,
     toggleLike,
     toggleDislike,
     toggleSave,
     onDownloadFromPreview: downloadPreviewDocumentWithPolicyCheck,
     onReportFromPreview: async (documentId, reason) => {
+      if (!token) {
+        setStatus("");
+        setError(requireAuthMessage);
+        return;
+      }
       if (!Number.isInteger(Number(documentId)) || Number(documentId) <= 0) return;
       await submitDocumentReport(Number(documentId), reason);
     },
     onStartQaFromPreview: async (documentId, initialMessage) => {
+      if (!token) {
+        setStatus("");
+        setError(requireAuthMessage);
+        return;
+      }
       await createQaSession(documentId, initialMessage);
+    },
+    isGuestMode: isGuestDashboard,
+    onNavigateToLogin: () => setAuthMode("login"),
+    onNavigateToRegister: () => setAuthMode("register"),
+    onGuestBlockedAction: () => {
+      setStatus("");
+      setError(requireAuthMessage);
     },
   };
 
-  return !token ? <AuthShell {...authShellProps} /> : <DashboardShell {...dashboardShellProps} />;
+  if (!token && !isGuestDashboard) {
+    return <AuthShell {...authShellProps} />;
+  }
+
+  return <DashboardShell {...dashboardShellProps} />;
 }
 
 export default AppController;

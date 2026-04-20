@@ -12,10 +12,11 @@ function PointsTabView(props) {
     <section className="panel">
       <h2>Points</h2>
       <div className="action-row" style={{ marginBottom: 12 }}>
-        <button type="button" onClick={controller.onRefresh}>
-          Refresh points
+        <button type="button" disabled={model.isBusy} onClick={controller.onRefresh}>
+          {model.isBusy ? "Refreshing..." : "Refresh points"}
         </button>
       </div>
+      {model.isBusy && <p className="hint">Updating point summary and events...</p>}
 
       <div className="stats profile-page-stats">
         <div>
@@ -92,4 +93,3 @@ function PointsTabView(props) {
 }
 
 export default PointsTabView;
-

@@ -170,7 +170,7 @@ const getPendingDocumentReportQueue = async ({
               AND ${reportWhereClause}
             ORDER BY r.createdAt DESC, r.reportId DESC
         ) latestReason
-        ORDER BY reportStats.uniqueReporterCount DESC, reportStats.latestReportedAt DESC;
+        ORDER BY reportStats.uniqueReporterCount DESC, reportStats.latestReportedAt DESC
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
     `);
 

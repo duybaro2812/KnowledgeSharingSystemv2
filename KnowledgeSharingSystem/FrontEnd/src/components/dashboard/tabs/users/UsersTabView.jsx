@@ -3,7 +3,63 @@ function UsersTabView(props) {
 
   return (
     <section className="panel">
-      <h2>User role management</h2>
+      <div className="moderation-header-row">
+        <h2>Admin workspace</h2>
+        <button type="button" disabled={model.isBusy} onClick={() => controller.onRefreshOverview()}>
+          Refresh overview
+        </button>
+      </div>
+      {model.isBusy && <p className="hint">Processing user action...</p>}
+
+      <div className="moderation-dashboard-cards">
+        <article className="moderation-dashboard-card">
+          <span>Total users</span>
+          <b>{Number(model.adminDashboard?.totalUsers || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Active users</span>
+          <b>{Number(model.adminDashboard?.activeUsers || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Locked users</span>
+          <b>{Number(model.adminDashboard?.lockedUsers || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Total documents</span>
+          <b>{Number(model.adminDashboard?.totalDocuments || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Pending documents</span>
+          <b>{Number(model.adminDashboard?.pendingDocuments || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Total downloads</span>
+          <b>{Number(model.adminDashboard?.totalDownloads || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Approved docs</span>
+          <b>{Number(model.adminDashboard?.approvedDocuments || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Rejected docs</span>
+          <b>{Number(model.adminDashboard?.rejectedDocuments || 0)}</b>
+        </article>
+        <article className="moderation-dashboard-card">
+          <span>Hidden docs</span>
+          <b>{Number(model.adminDashboard?.hiddenDocuments || 0)}</b>
+        </article>
+      </div>
+
+      <div className="moderation-subhead">
+        <h3>User role breakdown</h3>
+        <p>
+          Admin: <b>{Number(model.adminDashboard?.roleBreakdown?.admin || 0)}</b> · Moderator:{" "}
+          <b>{Number(model.adminDashboard?.roleBreakdown?.moderator || 0)}</b> · User:{" "}
+          <b>{Number(model.adminDashboard?.roleBreakdown?.user || 0)}</b>
+        </p>
+      </div>
+
+      <h3>User role management</h3>
       {model.users.length === 0 ? (
         <p className="hint">No users found.</p>
       ) : (
@@ -25,28 +81,28 @@ function UsersTabView(props) {
                 <span className="list-actions">
                   <button
                     type="button"
-                    disabled={!canPromote}
+                    disabled={!canPromote || model.isBusy}
                     onClick={() => controller.onPromote(u.userId)}
                   >
                     Promote moderator
                   </button>
                   <button
                     type="button"
-                    disabled={!canDemote}
+                    disabled={!canDemote || model.isBusy}
                     onClick={() => controller.onDemote(u.userId)}
                   >
                     Demote user
                   </button>
                   <button
                     type="button"
-                    disabled={!canLockUnlock || !u.isActive}
+                    disabled={!canLockUnlock || !u.isActive || model.isBusy}
                     onClick={() => controller.onLock(u.userId)}
                   >
                     Lock
                   </button>
                   <button
                     type="button"
-                    disabled={!canLockUnlock || !!u.isActive}
+                    disabled={!canLockUnlock || !!u.isActive || model.isBusy}
                     onClick={() => controller.onUnlock(u.userId)}
                   >
                     Unlock
@@ -54,7 +110,7 @@ function UsersTabView(props) {
                   <button
                     type="button"
                     className="danger-btn"
-                    disabled={!canDelete}
+                    disabled={!canDelete || model.isBusy}
                     onClick={() => {
                       const ok = window.confirm(
                         `Delete user #${u.userId} (${u.username})? This will soft-delete the account.`,
@@ -70,6 +126,7 @@ function UsersTabView(props) {
           })}
         </ul>
       )}
+
     </section>
   );
 }

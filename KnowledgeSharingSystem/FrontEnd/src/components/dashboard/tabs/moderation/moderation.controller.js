@@ -1,4 +1,9 @@
 export function createModerationController(input) {
+  const ensureModerator = () => {
+    if (!input.isModerator) return false;
+    return true;
+  };
+
   const toIntOrNull = (rawValue) => {
     if (rawValue === null) return null;
     const trimmed = String(rawValue).trim();
@@ -10,17 +15,18 @@ export function createModerationController(input) {
 
   return {
     onOpenPreview: (doc) => input.openPreview(doc),
-    onCheckDuplicate: (docId) => input.loadDuplicateCandidates(docId),
-    onApprove: (docId) => input.moderateDocument(docId, "approved"),
-    onReject: (docId) => input.moderateDocument(docId, "rejected"),
-    onLock: (docId) => input.lockUnlockDelete(docId, "lock"),
-    onUnlock: (docId) => input.lockUnlockDelete(docId, "unlock"),
-    onDelete: (docId) => input.lockUnlockDelete(docId, "delete"),
+    onCheckDuplicate: (docId) => ensureModerator() && input.loadDuplicateCandidates(docId),
+    onApprove: (docId) => ensureModerator() && input.moderateDocument(docId, "approved"),
+    onReject: (docId) => ensureModerator() && input.moderateDocument(docId, "rejected"),
+    onLock: (docId) => ensureModerator() && input.lockUnlockDelete(docId, "lock"),
+    onUnlock: (docId) => ensureModerator() && input.lockUnlockDelete(docId, "unlock"),
+    onDelete: (docId) => ensureModerator() && input.lockUnlockDelete(docId, "delete"),
     onResolveReportedUnlock: (docId) =>
-      input.resolveReportedDocument(docId, "unlock"),
+      ensureModerator() && input.resolveReportedDocument(docId, "unlock"),
     onResolveReportedDelete: (docId) =>
-      input.resolveReportedDocument(docId, "delete"),
+      ensureModerator() && input.resolveReportedDocument(docId, "delete"),
     onApprovePointEvent: (eventId) => {
+      if (!ensureModerator()) return;
       const rawPointDelta = window.prompt(
         "Optional pointDelta override (leave empty to use suggested points):",
         "",
@@ -33,10 +39,42 @@ export function createModerationController(input) {
       if (parsed !== null) body.pointDelta = parsed;
       input.reviewPointEvent(eventId, body);
     },
+    onApprovePointEventInline: (eventId, pointDelta, note = "") => {
+      if (!ensureModerator()) return;
+      const parsedPointDelta = toIntOrNull(pointDelta);
+      const body = { decision: "approved", note: String(note || "").trim() };
+      if (parsedPointDelta !== null) body.pointDelta = parsedPointDelta;
+      input.reviewPointEvent(eventId, body);
+    },
     onRejectPointEvent: (eventId) => {
+      if (!ensureModerator()) return;
       const note = window.prompt("Rejection reason:", "") || "";
       if (!note.trim()) return;
       input.reviewPointEvent(eventId, { decision: "rejected", note: note.trim() });
     },
+    onRejectPointEventInline: (eventId, note = "") => {
+      if (!ensureModerator()) return;
+      const normalizedNote = String(note || "").trim();
+      if (!normalizedNote) return;
+      input.reviewPointEvent(eventId, { decision: "rejected", note: normalizedNote });
+    },
+    onApproveComment: (commentId, reviewNote = "") =>
+      ensureModerator() &&
+      input.reviewPendingComment(commentId, {
+        decision: "approved",
+        reviewNote: String(reviewNote || "").trim(),
+      }),
+    onRejectComment: (commentId, reviewNote = "") => {
+      if (!ensureModerator()) return;
+      const normalized = String(reviewNote || "").trim();
+      if (!normalized) return;
+      input.reviewPendingComment(commentId, {
+        decision: "rejected",
+        reviewNote: normalized,
+      });
+    },
+    onHideComment: (commentId, documentId = null) =>
+      ensureModerator() && input.hideCommentForModeration(commentId, documentId),
+    onRefreshOverview: () => ensureModerator() && input.loadModerationOverview(),
   };
 }

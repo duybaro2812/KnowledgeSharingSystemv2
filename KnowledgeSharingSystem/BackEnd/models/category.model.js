@@ -8,17 +8,24 @@ const getActiveCategories = async ({ keyword = null } = {}) => {
         .input('keyword', sql.NVarChar(100), keyword || null)
         .query(`
         SELECT
-            categoryId,
-            name,
-            description,
-            isActive
-        FROM dbo.Categories
-        WHERE isActive = 1
+            c.categoryId,
+            c.name,
+            c.description,
+            c.isActive,
+            (
+                SELECT COUNT(DISTINCT dc.documentId)
+                FROM dbo.DocumentCategories dc
+                INNER JOIN dbo.Documents d ON d.documentId = dc.documentId
+                WHERE dc.categoryId = c.categoryId
+                  AND d.status = N'approved'
+            ) AS documentCount
+        FROM dbo.Categories c
+        WHERE c.isActive = 1
           AND (
                 @keyword IS NULL
-                OR name LIKE N'%' + @keyword + N'%'
+                OR c.name LIKE N'%' + @keyword + N'%'
               )
-        ORDER BY name ASC;
+        ORDER BY documentCount DESC, c.name ASC;
     `);
 
     return result.recordset;
@@ -65,12 +72,19 @@ const getCategoryById = async (categoryId) => {
         .input('categoryId', sql.Int, categoryId)
         .query(`
             SELECT
-                categoryId,
-                name,
-                description,
-                isActive
-            FROM dbo.Categories
-            WHERE categoryId = @categoryId;
+                c.categoryId,
+                c.name,
+                c.description,
+                c.isActive,
+                (
+                    SELECT COUNT(DISTINCT dc.documentId)
+                    FROM dbo.DocumentCategories dc
+                    INNER JOIN dbo.Documents d ON d.documentId = dc.documentId
+                    WHERE dc.categoryId = c.categoryId
+                      AND d.status = N'approved'
+                ) AS documentCount
+            FROM dbo.Categories c
+            WHERE c.categoryId = @categoryId;
         `);
 
     return result.recordset[0] || null;

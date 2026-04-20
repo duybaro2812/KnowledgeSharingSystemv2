@@ -78,11 +78,22 @@ function RegisterFormView(props) {
           {model.showRegisterConfirmPassword ? "Hide" : "Show"}
         </button>
       </div>
-      <button type="submit" className="primary-btn">
-        Register & send OTP
+      <button
+        type="submit"
+        className="primary-btn"
+        disabled={model.isRegisterOtpSending || model.resendCooldown > 0}
+      >
+        {model.isRegisterOtpSending
+          ? "Sending OTP..."
+          : model.resendCooldown > 0
+            ? `Resend in ${model.resendCooldown}s`
+            : "Register & send OTP"}
       </button>
       <button type="button" onClick={controller.goLogin}>
         Back to login
+      </button>
+      <button type="button" className="link-btn" onClick={controller.goGuest}>
+        Continue as guest
       </button>
       {model.error && <p className="err">{model.error}</p>}
     </form>

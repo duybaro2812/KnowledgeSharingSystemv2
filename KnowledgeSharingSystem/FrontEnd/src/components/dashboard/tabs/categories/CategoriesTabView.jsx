@@ -1,5 +1,13 @@
 function CategoriesTabView(props) {
   const { model, controller } = props;
+  if (!model.isModerator) {
+    return (
+      <section className="panel">
+        <h2>Courses</h2>
+        <p className="hint">Only moderator/admin can manage courses.</p>
+      </section>
+    );
+  }
 
   return (
     <section className="panel">

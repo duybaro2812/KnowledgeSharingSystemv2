@@ -151,6 +151,8 @@ function Sidebar(props) {
     activeTab,
     setActiveTab,
     isSidebarCollapsed,
+    isGuestMode,
+    onGuestBlockedAction,
     qaUnreadCount = 0,
     notifications = [],
   } = props;
@@ -158,6 +160,7 @@ function Sidebar(props) {
   const isUserRole = role === "user";
   const isAdminRole = role === "admin";
   const initials = (user?.name || "U").slice(0, 1).toUpperCase();
+  const profileRoleLabel = isGuestMode ? "Guest" : user?.role;
   const notificationUnreadCount = (Array.isArray(notifications) ? notifications : []).filter(
     (item) => !item?.isRead,
   ).length;
@@ -172,6 +175,9 @@ function Sidebar(props) {
     : [
         { key: "home", label: "Home", icon: <HomeIcon /> },
         { key: "moderation", label: isAdminRole ? "Admin queue" : "Moderation queue", icon: <RecentIcon /> },
+        { key: "documents", label: "Documents", icon: <LibraryIcon /> },
+        ...(isAdminRole ? [{ key: "users", label: "Users", icon: <QaIcon /> }] : []),
+        { key: "categories", label: "Courses", icon: <LibraryIcon /> },
         { key: "notifications", label: "Notifications", icon: <LibraryIcon />, badgeCount: notificationUnreadCount },
       ];
 
@@ -192,7 +198,7 @@ function Sidebar(props) {
           {!isSidebarCollapsed && (
             <div className="profile-copy">
               <div className="profile-name">{user?.name}</div>
-              <div className="profile-role">{user?.role}</div>
+              <div className="profile-role">{profileRoleLabel}</div>
             </div>
           )}
         </button>
@@ -202,16 +208,16 @@ function Sidebar(props) {
         ) : (
           <div className="stats sidebar-stats">
             <div>
-              <b>{stats.followers}</b>
-              <span>Followers</span>
+              <b>{stats.uploads || 0}</b>
+              <span>Upload</span>
             </div>
             <div>
-              <b>{stats.uploads}</b>
-              <span>Uploads</span>
+              <b>{stats.pending || 0}</b>
+              <span>Pending</span>
             </div>
             <div>
               <b>{stats.upvotes || 0}</b>
-              <span>Upvotes</span>
+              <span>Upvote</span>
             </div>
           </div>
         )}
@@ -220,7 +226,15 @@ function Sidebar(props) {
           <button
             type="button"
             className={`sidebar-upload-btn ${isSidebarCollapsed ? "icon-only" : ""}`}
-            onClick={() => setActiveTab("upload")}
+            onClick={() => {
+              if (isGuestMode) {
+                if (typeof onGuestBlockedAction === "function") {
+                  onGuestBlockedAction();
+                }
+                return;
+              }
+              setActiveTab("upload");
+            }}
             title="New upload"
           >
             <span className="sidebar-upload-icon">
@@ -255,7 +269,11 @@ function Sidebar(props) {
             >
               <span className="sidebar-menu-icon">{item.icon}</span>
               {!isSidebarCollapsed && <span>{item.label}</span>}
-              {Number(item.badgeCount || 0) > 0 && <span className="sidebar-menu-badge" aria-hidden="true" />}
+              {Number(item.badgeCount || 0) > 0 && (
+                <span className="sidebar-menu-badge" aria-hidden="true">
+                  {Number(item.badgeCount) > 10 ? "10+" : Number(item.badgeCount)}
+                </span>
+              )}
             </button>
           ))}
         </nav>

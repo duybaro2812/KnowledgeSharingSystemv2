@@ -24,18 +24,129 @@ const getModerationStats = async ({ dateFrom = null, dateTo = null } = {}) => {
     request.input('dateFrom', sql.Date, normalizedDateFrom);
     request.input('dateTo', sql.Date, normalizedDateTo);
 
-    const result = await request.query(`
+    const tableCheck = await pool.request().query(`
         SELECT
-            -- Pending queues
-            (SELECT COUNT(1) FROM dbo.Documents WHERE status = N'pending') AS pendingDocuments,
-            (SELECT COUNT(1) FROM dbo.Comments WHERE status = N'pending') AS pendingComments,
-            (SELECT COUNT(1) FROM dbo.Reports WHERE status IN (N'pending', N'reviewed')) AS pendingReports,
-            (SELECT COUNT(1) FROM dbo.PointEvents WHERE status = N'pending') AS pendingPointEvents,
+            CASE WHEN OBJECT_ID(N'dbo.DocumentPlagiarismReviews', N'U') IS NULL THEN 0 ELSE 1 END AS hasPlagiarismTable,
+            CASE WHEN OBJECT_ID(N'dbo.AdminActionLogs', N'U') IS NULL THEN 0 ELSE 1 END AS hasAdminActionLogsTable,
+            CASE WHEN OBJECT_ID(N'dbo.UserActivityLogs', N'U') IS NULL THEN 0 ELSE 1 END AS hasUserActivityLogsTable;
+    `);
+    const hasPlagiarismReviewTable =
+        Number(tableCheck.recordset?.[0]?.hasPlagiarismTable || 0) === 1;
+    const hasAdminActionLogsTable =
+        Number(tableCheck.recordset?.[0]?.hasAdminActionLogsTable || 0) === 1;
+    const hasUserActivityLogsTable =
+        Number(tableCheck.recordset?.[0]?.hasUserActivityLogsTable || 0) === 1;
+
+    const adminActionTimelineUnion = hasAdminActionLogsTable
+        ? `
+            -- Admin user-management actions
+            SELECT
+                N'admin_action' AS source,
+                CAST(al.logId AS BIGINT) AS sourceId,
+                al.createdAt,
+                al.actionType AS action,
+                al.actorUserId,
+                actor.name AS actorName,
+                actor.role AS actorRole,
+                N'user' AS targetType,
+                al.targetUserId AS targetId,
+                targetUser.name AS targetName,
+                NULL AS decision,
+                al.note AS note
+            FROM dbo.AdminActionLogs al
+            INNER JOIN dbo.Users actor ON actor.userId = al.actorUserId
+            INNER JOIN dbo.Users targetUser ON targetUser.userId = al.targetUserId
+            WHERE CAST(al.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : `
+            SELECT
+                N'admin_action' AS source,
+                CAST(0 AS BIGINT) AS sourceId,
+                CAST(NULL AS DATETIME2) AS createdAt,
+                CAST(NULL AS NVARCHAR(100)) AS action,
+                CAST(NULL AS INT) AS actorUserId,
+                CAST(NULL AS NVARCHAR(255)) AS actorName,
+                CAST(NULL AS NVARCHAR(20)) AS actorRole,
+                CAST(NULL AS NVARCHAR(30)) AS targetType,
+                CAST(NULL AS INT) AS targetId,
+                CAST(NULL AS NVARCHAR(255)) AS targetName,
+                CAST(NULL AS NVARCHAR(50)) AS decision,
+                CAST(NULL AS NVARCHAR(255)) AS note
+            WHERE 1 = 0
+        `;
+
+    const documentActionTimelineUnion = hasUserActivityLogsTable
+        ? `
+            UNION ALL
+
+            -- Document moderation actions
+            SELECT
+                N'document_action' AS source,
+                CAST(ual.logId AS BIGINT) AS sourceId,
+                ual.createdAt,
+                ual.action,
+                ual.userId AS actorUserId,
+                actor.name AS actorName,
+                actor.role AS actorRole,
+                ual.targetType AS targetType,
+                ual.targetId AS targetId,
+                d.title AS targetName,
+                NULL AS decision,
+                NULL AS note
+            FROM dbo.UserActivityLogs ual
+            INNER JOIN dbo.Users actor ON actor.userId = ual.userId
+            LEFT JOIN dbo.Documents d ON d.documentId = ual.targetId AND ual.targetType = N'document'
+            WHERE ual.action IN (
+                N'lock_document',
+                N'unlock_document',
+                N'delete_document',
+                N'resolve_report_unlock_document',
+                N'deduct_points_on_delete'
+            )
+              AND CAST(ual.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : ``;
+
+    const plagiarismStatsSelect = hasPlagiarismReviewTable
+        ? `
             (
                 SELECT COUNT(1)
                 FROM dbo.DocumentPlagiarismReviews
                 WHERE CAST(createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
             ) AS plagiarismReviewsInRange,
+        `
+        : `
+            CAST(0 AS INT) AS plagiarismReviewsInRange,
+        `;
+
+    const result = await request.query(`
+        SELECT
+            -- Platform overview
+            (SELECT COUNT(1) FROM dbo.Users) AS totalUsers,
+            (SELECT COUNT(1) FROM dbo.Users WHERE isActive = 1) AS activeUsers,
+            (SELECT COUNT(1) FROM dbo.Users WHERE isActive = 0) AS lockedUsers,
+            (SELECT COUNT(1) FROM dbo.Users WHERE role = N'moderator') AS totalModerators,
+            (SELECT COUNT(1) FROM dbo.Documents) AS totalDocuments,
+            (SELECT COUNT(1) FROM dbo.Documents WHERE status = N'approved') AS approvedDocuments,
+            (SELECT COUNT(1) FROM dbo.Documents WHERE status = N'rejected') AS rejectedDocuments,
+            (
+                SELECT COUNT(1)
+                FROM dbo.DocumentAccessLogs
+                WHERE accessType = N'download'
+            ) AS totalDownloads,
+            (
+                SELECT COUNT(1)
+                FROM dbo.DocumentAccessLogs
+                WHERE accessType = N'download'
+                  AND CAST(accessDate AS DATE) BETWEEN @dateFrom AND @dateTo
+            ) AS downloadsInRange,
+
+            -- Pending queues
+            (SELECT COUNT(1) FROM dbo.Documents WHERE status = N'pending') AS pendingDocuments,
+            (SELECT COUNT(1) FROM dbo.Comments WHERE status = N'pending') AS pendingComments,
+            (SELECT COUNT(1) FROM dbo.Reports WHERE status IN (N'pending', N'reviewed')) AS pendingReports,
+            (SELECT COUNT(1) FROM dbo.PointEvents WHERE status = N'pending') AS pendingPointEvents,
+            ${plagiarismStatsSelect}
 
             -- Reviewed in range
             (
@@ -109,8 +220,21 @@ const getModerationTimeline = async ({
     request.input('actorUserId', sql.Int, actorUserId);
     request.input('source', sql.NVarChar(30), normalizedSource);
 
-    const result = await request.query(`
-        ;WITH timeline AS (
+    const tableCheck = await pool.request().query(`
+        SELECT
+            CASE WHEN OBJECT_ID(N'dbo.DocumentPlagiarismReviews', N'U') IS NULL THEN 0 ELSE 1 END AS hasPlagiarismTable,
+            CASE WHEN OBJECT_ID(N'dbo.AdminActionLogs', N'U') IS NULL THEN 0 ELSE 1 END AS hasAdminActionLogsTable,
+            CASE WHEN OBJECT_ID(N'dbo.UserActivityLogs', N'U') IS NULL THEN 0 ELSE 1 END AS hasUserActivityLogsTable;
+    `);
+    const hasPlagiarismReviewTable =
+        Number(tableCheck.recordset?.[0]?.hasPlagiarismTable || 0) === 1;
+    const hasAdminActionLogsTable =
+        Number(tableCheck.recordset?.[0]?.hasAdminActionLogsTable || 0) === 1;
+    const hasUserActivityLogsTable =
+        Number(tableCheck.recordset?.[0]?.hasUserActivityLogsTable || 0) === 1;
+
+    const adminActionTimelineUnion = hasAdminActionLogsTable
+        ? `
             -- Admin user-management actions
             SELECT
                 N'admin_action' AS source,
@@ -129,7 +253,26 @@ const getModerationTimeline = async ({
             INNER JOIN dbo.Users actor ON actor.userId = al.actorUserId
             INNER JOIN dbo.Users targetUser ON targetUser.userId = al.targetUserId
             WHERE CAST(al.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : `
+            SELECT
+                N'admin_action' AS source,
+                CAST(0 AS BIGINT) AS sourceId,
+                CAST(NULL AS DATETIME2) AS createdAt,
+                CAST(NULL AS NVARCHAR(100)) AS action,
+                CAST(NULL AS INT) AS actorUserId,
+                CAST(NULL AS NVARCHAR(255)) AS actorName,
+                CAST(NULL AS NVARCHAR(20)) AS actorRole,
+                CAST(NULL AS NVARCHAR(30)) AS targetType,
+                CAST(NULL AS INT) AS targetId,
+                CAST(NULL AS NVARCHAR(255)) AS targetName,
+                CAST(NULL AS NVARCHAR(50)) AS decision,
+                CAST(NULL AS NVARCHAR(255)) AS note
+            WHERE 1 = 0
+        `;
 
+    const documentActionTimelineUnion = hasUserActivityLogsTable
+        ? `
             UNION ALL
 
             -- Document moderation actions
@@ -157,7 +300,11 @@ const getModerationTimeline = async ({
                 N'deduct_points_on_delete'
             )
               AND CAST(ual.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : ``;
 
+    const plagiarismTimelineUnion = hasPlagiarismReviewTable
+        ? `
             UNION ALL
 
             -- Plagiarism review actions
@@ -178,6 +325,52 @@ const getModerationTimeline = async ({
             INNER JOIN dbo.Users actor ON actor.userId = pr.reviewedByUserId
             LEFT JOIN dbo.Documents d ON d.documentId = pr.documentId
             WHERE CAST(pr.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : ``;
+
+    const adminActionCountUnion = hasAdminActionLogsTable
+        ? `
+            SELECT N'admin_action' AS source, al.logId AS sourceId, al.createdAt, al.actorUserId
+            FROM dbo.AdminActionLogs al
+            WHERE CAST(al.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : `
+            SELECT CAST(NULL AS NVARCHAR(30)) AS source, CAST(NULL AS BIGINT) AS sourceId, CAST(NULL AS DATETIME2) AS createdAt, CAST(NULL AS INT) AS actorUserId
+            WHERE 1 = 0
+        `;
+
+    const documentActionCountUnion = hasUserActivityLogsTable
+        ? `
+            UNION ALL
+
+            SELECT N'document_action' AS source, ual.logId AS sourceId, ual.createdAt, ual.userId AS actorUserId
+            FROM dbo.UserActivityLogs ual
+            WHERE ual.action IN (
+                N'lock_document',
+                N'unlock_document',
+                N'delete_document',
+                N'resolve_report_unlock_document',
+                N'deduct_points_on_delete'
+            )
+              AND CAST(ual.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : ``;
+
+    const plagiarismCountUnion = hasPlagiarismReviewTable
+        ? `
+            UNION ALL
+
+            SELECT N'plagiarism_review' AS source, pr.plagiarismReviewId AS sourceId, pr.createdAt, pr.reviewedByUserId AS actorUserId
+            FROM dbo.DocumentPlagiarismReviews pr
+            WHERE CAST(pr.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+        `
+        : ``;
+
+    const result = await request.query(`
+        ;WITH timeline AS (
+            ${adminActionTimelineUnion}
+            ${documentActionTimelineUnion}
+            ${plagiarismTimelineUnion}
 
             UNION ALL
 
@@ -263,28 +456,9 @@ const getModerationTimeline = async ({
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
 
         ;WITH timelineCount AS (
-            SELECT N'admin_action' AS source, al.logId AS sourceId, al.createdAt, al.actorUserId
-            FROM dbo.AdminActionLogs al
-            WHERE CAST(al.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
-
-            UNION ALL
-
-            SELECT N'document_action' AS source, ual.logId AS sourceId, ual.createdAt, ual.userId AS actorUserId
-            FROM dbo.UserActivityLogs ual
-            WHERE ual.action IN (
-                N'lock_document',
-                N'unlock_document',
-                N'delete_document',
-                N'resolve_report_unlock_document',
-                N'deduct_points_on_delete'
-            )
-              AND CAST(ual.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
-
-            UNION ALL
-
-            SELECT N'plagiarism_review' AS source, pr.plagiarismReviewId AS sourceId, pr.createdAt, pr.reviewedByUserId AS actorUserId
-            FROM dbo.DocumentPlagiarismReviews pr
-            WHERE CAST(pr.createdAt AS DATE) BETWEEN @dateFrom AND @dateTo
+            ${adminActionCountUnion}
+            ${documentActionCountUnion}
+            ${plagiarismCountUnion}
 
             UNION ALL
 

@@ -3,6 +3,7 @@ const POINT_POLICY = {
         previewThreshold: 30,
         fullViewThreshold: 40,
         fullViewDailyLimitFor30To39: 3,
+        previewPageLimitWhenLocked: 5,
     },
     download: {
         standardCost: 30,

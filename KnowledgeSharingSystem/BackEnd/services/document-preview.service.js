@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const fs = require('fs/promises');
+const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
@@ -14,14 +15,28 @@ const MANIFEST_FILE_NAME = 'manifest.json';
 const PREVIEW_PDF_NAME = 'viewer.pdf';
 const PREVIEW_HTML_NAME = 'viewer.html';
 const PREVIEW_VERSION = 1;
+const PREVIEW_FETCH_RETRY_ATTEMPTS = Number(process.env.DOCUMENT_PREVIEW_FETCH_RETRY_ATTEMPTS || 3);
+const PREVIEW_FETCH_RETRY_DELAY_MS = Number(process.env.DOCUMENT_PREVIEW_FETCH_RETRY_DELAY_MS || 350);
+const PREVIEW_CONVERT_RETRY_ATTEMPTS = Number(process.env.DOCUMENT_PREVIEW_CONVERT_RETRY_ATTEMPTS || 2);
+const PREVIEW_CONVERT_RETRY_DELAY_MS = Number(process.env.DOCUMENT_PREVIEW_CONVERT_RETRY_DELAY_MS || 500);
 
 let discoveredLibreOfficePath = undefined;
+const previewPreparationInFlight = new Map();
 
 const getBackendRoot = () => path.resolve(__dirname, '..');
 const getUploadsRoot = () =>
     path.resolve(getBackendRoot(), process.env.UPLOAD_DIR || 'uploads');
 const getPreviewRoot = () => path.join(getUploadsRoot(), 'previews');
-const getPreviewWorkRoot = () => path.join(getPreviewRoot(), '_work');
+const getPreviewWorkRoot = () => {
+    const configuredRoot = process.env.DOCUMENT_PREVIEW_WORK_DIR;
+
+    if (configuredRoot && String(configuredRoot).trim()) {
+        return path.resolve(String(configuredRoot).trim());
+    }
+
+    // Use system temp by default to avoid LibreOffice issues with non-ASCII project paths.
+    return path.join(os.tmpdir(), 'neushare-preview-work');
+};
 const getDocumentPreviewDir = (documentId) =>
     path.join(getPreviewRoot(), `document-${Number(documentId)}`);
 const getManifestPath = (documentId) =>
@@ -36,6 +51,33 @@ const toUploadPublicUrl = (absolutePath) => {
 
 const hashBuffer = (buffer) =>
     crypto.createHash('sha256').update(buffer).digest('hex');
+
+const wait = (durationMs) =>
+    new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(durationMs) || 0)));
+
+const withRetry = async (task, { attempts, delayMs, shouldRetry }) => {
+    const totalAttempts = Math.max(1, Number(attempts) || 1);
+    let latestError = null;
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+        try {
+            return await task(attempt);
+        } catch (error) {
+            latestError = error;
+            const allowRetry =
+                attempt < totalAttempts &&
+                (typeof shouldRetry !== 'function' || shouldRetry(error));
+
+            if (!allowRetry) {
+                throw error;
+            }
+
+            await wait(delayMs);
+        }
+    }
+
+    throw latestError || new Error('Preview retry pipeline failed.');
+};
 
 const inferExtension = ({ originalFileName, mimeType }) => {
     const explicitExtension = path.extname(String(originalFileName || '')).toLowerCase();
@@ -304,7 +346,18 @@ const convertOfficeDocumentToPdf = async ({ sourcePath, outputDirectory }) => {
 
     await execFileAsync(
         libreOfficeBinary,
-        ['--headless', '--convert-to', 'pdf', '--outdir', outputDirectory, sourcePath],
+        [
+            '--headless',
+            '--nologo',
+            '--nodefault',
+            '--nofirststartwizard',
+            '--nolockcheck',
+            '--convert-to',
+            'pdf',
+            '--outdir',
+            outputDirectory,
+            sourcePath,
+        ],
         {
             timeout: Number(process.env.DOCUMENT_PREVIEW_CONVERT_TIMEOUT_MS || 120000),
             windowsHide: true,
@@ -418,10 +471,29 @@ const prepareOfficePreview = async ({
     try {
         await fs.writeFile(sourcePath, buffer);
 
-        const { libreOfficeBinary, convertedPdfPath } = await convertOfficeDocumentToPdf({
-            sourcePath,
-            outputDirectory: workDir,
-        });
+        const { libreOfficeBinary, convertedPdfPath } = await withRetry(
+            () =>
+                convertOfficeDocumentToPdf({
+                    sourcePath,
+                    outputDirectory: workDir,
+                }),
+            {
+                attempts: PREVIEW_CONVERT_RETRY_ATTEMPTS,
+                delayMs: PREVIEW_CONVERT_RETRY_DELAY_MS,
+                shouldRetry: (error) => {
+                    const code = String(error?.code || '').toUpperCase();
+                    const message = String(error?.message || '').toLowerCase();
+                    return (
+                        code === 'ETIMEDOUT' ||
+                        code === 'EBUSY' ||
+                        code === 'EPERM' ||
+                        message.includes('timed out') ||
+                        message.includes('busy') ||
+                        message.includes('file is locked')
+                    );
+                },
+            }
+        );
 
         const viewerPath = path.join(previewDir, PREVIEW_PDF_NAME);
         await fs.copyFile(convertedPdfPath, viewerPath);
@@ -450,79 +522,113 @@ const prepareDocumentPreview = async ({
     buffer = null,
     force = false,
 }) => {
-    const actualBuffer =
-        buffer || (await downloadStoredDocumentBuffer(fileUrl));
-    const sourceHash = hashBuffer(actualBuffer);
-    const existingManifest = await readManifest(documentId);
+    const numericDocumentId = Number(documentId);
+    const inFlight = previewPreparationInFlight.get(numericDocumentId);
 
-    if (
-        !force &&
-        existingManifest &&
-        existingManifest.version === PREVIEW_VERSION &&
-        existingManifest.sourceHash === sourceHash
-    ) {
-        return existingManifest;
+    if (inFlight) {
+        return inFlight;
     }
 
-    const extension = inferExtension({ originalFileName, mimeType });
-    const previewDir = await ensurePreviewDirectory(documentId);
+    const job = (async () => {
+        const actualBuffer = buffer
+            ? buffer
+            : await withRetry(() => downloadStoredDocumentBuffer(fileUrl), {
+                attempts: PREVIEW_FETCH_RETRY_ATTEMPTS,
+                delayMs: PREVIEW_FETCH_RETRY_DELAY_MS,
+                shouldRetry: (error) => {
+                    const code = String(error?.code || '').toUpperCase();
+                    const message = String(error?.message || '').toLowerCase();
+                    return (
+                        code === 'ETIMEDOUT' ||
+                        code === 'ECONNRESET' ||
+                        code === 'ECONNREFUSED' ||
+                        code === 'EAI_AGAIN' ||
+                        message.includes('http status 5') ||
+                        message.includes('timed out') ||
+                        message.includes('network')
+                    );
+                },
+            });
+        const sourceHash = hashBuffer(actualBuffer);
+        const existingManifest = await readManifest(numericDocumentId);
 
-    try {
-        await cleanupPreviewArtifacts(previewDir);
-        let manifest;
-
-        if (PDF_EXTENSIONS.has(extension)) {
-            manifest = await preparePdfPreview({
-                documentId,
-                previewDir,
-                sourceHash,
-                originalFileName,
-                mimeType,
-                buffer: actualBuffer,
-            });
-        } else if (TEXT_EXTENSIONS.has(extension)) {
-            manifest = await prepareTextPreview({
-                documentId,
-                previewDir,
-                sourceHash,
-                originalFileName,
-                mimeType,
-                title,
-                buffer: actualBuffer,
-            });
-        } else if (OFFICE_EXTENSIONS.has(extension)) {
-            manifest = await prepareOfficePreview({
-                documentId,
-                previewDir,
-                sourceHash,
-                originalFileName,
-                mimeType,
-                buffer: actualBuffer,
-            });
-        } else {
-            manifest = buildUnavailableManifest({
-                documentId,
-                sourceHash,
-                originalFileName,
-                mimeType,
-                reason: `Preview conversion is not supported for "${extension || 'unknown'}" files yet.`,
-            });
+        if (
+            !force &&
+            existingManifest &&
+            existingManifest.version === PREVIEW_VERSION &&
+            existingManifest.sourceHash === sourceHash
+        ) {
+            return existingManifest;
         }
 
-        await writeManifest(documentId, manifest);
-        return manifest;
-    } catch (error) {
-        const manifest = buildUnavailableManifest({
-            documentId,
-            sourceHash,
-            originalFileName,
-            mimeType,
-            reason: error.message,
-            converter: OFFICE_EXTENSIONS.has(extension) ? 'libreoffice' : null,
-        });
+        const extension = inferExtension({ originalFileName, mimeType });
+        const previewDir = await ensurePreviewDirectory(numericDocumentId);
 
-        await writeManifest(documentId, manifest);
-        return manifest;
+        try {
+            await cleanupPreviewArtifacts(previewDir);
+            let manifest;
+
+            if (PDF_EXTENSIONS.has(extension)) {
+                manifest = await preparePdfPreview({
+                    documentId: numericDocumentId,
+                    previewDir,
+                    sourceHash,
+                    originalFileName,
+                    mimeType,
+                    buffer: actualBuffer,
+                });
+            } else if (TEXT_EXTENSIONS.has(extension)) {
+                manifest = await prepareTextPreview({
+                    documentId: numericDocumentId,
+                    previewDir,
+                    sourceHash,
+                    originalFileName,
+                    mimeType,
+                    title,
+                    buffer: actualBuffer,
+                });
+            } else if (OFFICE_EXTENSIONS.has(extension)) {
+                manifest = await prepareOfficePreview({
+                    documentId: numericDocumentId,
+                    previewDir,
+                    sourceHash,
+                    originalFileName,
+                    mimeType,
+                    buffer: actualBuffer,
+                });
+            } else {
+                manifest = buildUnavailableManifest({
+                    documentId: numericDocumentId,
+                    sourceHash,
+                    originalFileName,
+                    mimeType,
+                    reason: `Preview conversion is not supported for "${extension || 'unknown'}" files yet.`,
+                });
+            }
+
+            await writeManifest(numericDocumentId, manifest);
+            return manifest;
+        } catch (error) {
+            const manifest = buildUnavailableManifest({
+                documentId: numericDocumentId,
+                sourceHash,
+                originalFileName,
+                mimeType,
+                reason: error.message,
+                converter: OFFICE_EXTENSIONS.has(extension) ? 'libreoffice' : null,
+            });
+
+            await writeManifest(numericDocumentId, manifest);
+            return manifest;
+        }
+    })();
+
+    previewPreparationInFlight.set(numericDocumentId, job);
+
+    try {
+        return await job;
+    } finally {
+        previewPreparationInFlight.delete(numericDocumentId);
     }
 };
 

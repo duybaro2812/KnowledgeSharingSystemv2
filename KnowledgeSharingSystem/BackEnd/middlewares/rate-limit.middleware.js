@@ -1,10 +1,23 @@
 const store = new Map();
+const MAX_TRACKED_BUCKETS = Number(process.env.RATE_LIMIT_MAX_BUCKETS || 5000);
 
 const getClientKey = (req) =>
+    String(req.headers['x-forwarded-for'] || '')
+        .split(',')[0]
+        .trim() ||
     req.ip ||
-    req.headers['x-forwarded-for'] ||
     req.connection?.remoteAddress ||
     'unknown';
+
+const cleanupExpiredBuckets = (now) => {
+    if (store.size <= MAX_TRACKED_BUCKETS) return;
+
+    for (const [key, bucket] of store.entries()) {
+        if (!bucket || bucket.expiresAt <= now) {
+            store.delete(key);
+        }
+    }
+};
 
 const createRateLimiter = ({
     keyPrefix,
@@ -14,6 +27,7 @@ const createRateLimiter = ({
 }) => {
     return (req, res, next) => {
         const now = Date.now();
+        cleanupExpiredBuckets(now);
         const clientKey = `${keyPrefix}:${getClientKey(req)}`;
         const bucket = store.get(clientKey);
 
@@ -26,9 +40,12 @@ const createRateLimiter = ({
         }
 
         if (bucket.count >= maxRequests) {
+            const retryAfterSeconds = Math.max(1, Math.ceil((bucket.expiresAt - now) / 1000));
+            res.setHeader('Retry-After', String(retryAfterSeconds));
             return res.status(429).json({
                 success: false,
                 message,
+                retryAfterSeconds,
             });
         }
 

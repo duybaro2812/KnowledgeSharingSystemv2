@@ -44,6 +44,7 @@ export function createNotificationsModel(input) {
   ];
 
   return {
+    isBusy: Boolean(input.isBusy),
     notifications: items,
     unreadCount,
     categories: categories.filter((item) => item.count > 0 || item.key === "all" || item.key === "unread"),

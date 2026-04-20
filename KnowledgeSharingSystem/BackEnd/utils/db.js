@@ -72,9 +72,22 @@ const getPool = () => {
     return pool;
 };
 
+const isConnected = () => {
+    if (!pool) return false;
+    return Boolean(pool.connected || pool.connecting);
+};
+
+const pingDB = async () => {
+    const activePool = pool || (await connectDB());
+    const result = await activePool.request().query('SELECT 1 AS ok;');
+    return Number(result?.recordset?.[0]?.ok || 0) === 1;
+};
+
 module.exports = {
     sql,
     dbConfig,
     connectDB,
     getPool,
+    isConnected,
+    pingDB,
 };

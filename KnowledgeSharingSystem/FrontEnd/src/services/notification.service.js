@@ -7,7 +7,7 @@ export function createNotificationFeature(ctx) {
     await call(async () => {
       await apiRequest(`/notifications/${id}/read`, { method: "PATCH", token });
       await loadNotifications();
-    });
+    }, { actionKey: `notification:mark-read:${id}` });
   };
 
   return { markRead };

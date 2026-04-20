@@ -221,10 +221,28 @@ const reviewPointEvent = async ({
             throw error;
         }
 
-        if (pointEvent.status !== 'pending') {
-            const error = new Error('Only pending point events can be reviewed.');
+        if (!['pending', 'approved', 'rejected'].includes(String(pointEvent.status || '').toLowerCase())) {
+            const error = new Error('Point event has invalid status for review.');
             error.statusCode = 400;
             throw error;
+        }
+
+        const previousStatus = String(pointEvent.status || '').toLowerCase();
+        const previousPoints = Number(pointEvent.points || 0);
+
+        const nextApprovedPoints = Number.isInteger(pointDeltaOverride)
+            ? pointDeltaOverride
+            : previousPoints;
+
+        let pointDelta = 0;
+        if (decision === 'approved') {
+            if (previousStatus === 'approved') {
+                pointDelta = nextApprovedPoints - previousPoints;
+            } else {
+                pointDelta = nextApprovedPoints;
+            }
+        } else if (decision === 'rejected' && previousStatus === 'approved') {
+            pointDelta = -previousPoints;
         }
 
         const updateRequest = new sql.Request(transaction);
@@ -232,6 +250,11 @@ const reviewPointEvent = async ({
         updateRequest.input('status', sql.NVarChar(20), decision);
         updateRequest.input('reviewedByUserId', sql.Int, reviewedByUserId);
         updateRequest.input('reviewNote', sql.NVarChar(255), reviewNote);
+        updateRequest.input(
+            'nextApprovedPoints',
+            sql.Int,
+            decision === 'approved' && Number.isInteger(nextApprovedPoints) ? nextApprovedPoints : null
+        );
 
         await updateRequest.query(`
             UPDATE dbo.PointEvents
@@ -239,6 +262,10 @@ const reviewPointEvent = async ({
                 status = @status,
                 reviewedByUserId = @reviewedByUserId,
                 reviewNote = @reviewNote,
+                points = CASE
+                    WHEN @status = N'approved' AND @nextApprovedPoints IS NOT NULL THEN @nextApprovedPoints
+                    ELSE points
+                END,
                 reviewedAt = SYSDATETIME()
             WHERE eventId = @eventId;
         `);
@@ -248,11 +275,11 @@ const reviewPointEvent = async ({
 
         if (decision === 'approved') {
             const transactionType = EVENT_TO_TRANSACTION_TYPE[pointEvent.eventType] || 'admin_adjustment';
-            const pointDelta = Number.isInteger(pointDeltaOverride)
-                ? pointDeltaOverride
-                : Number(pointEvent.points || 0);
-            approvedPoints = pointDelta;
-            const description = `Point reward approved for event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`;
+            approvedPoints = nextApprovedPoints;
+            const description =
+                previousStatus === 'approved'
+                    ? `Point reward adjusted for event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`
+                    : `Point reward approved for event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`;
 
             if (pointDelta !== 0) {
                 const pointCheckRequest = new sql.Request(transaction);
@@ -336,6 +363,72 @@ const reviewPointEvent = async ({
                 `);
                 userPointsAfter = balanceResult.recordset[0]?.userPointsAfter ?? null;
             }
+        } else if (decision === 'rejected' && pointDelta !== 0) {
+            const transactionType = EVENT_TO_TRANSACTION_TYPE[pointEvent.eventType] || 'admin_adjustment';
+            const description = `Point reward reverted for rejected event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`;
+
+            const pointCheckRequest = new sql.Request(transaction);
+            pointCheckRequest.input('userId', sql.Int, pointEvent.userId);
+            const pointCheckResult = await pointCheckRequest.query(`
+                SELECT points
+                FROM dbo.Users
+                WHERE userId = @userId;
+            `);
+
+            const currentPoints = pointCheckResult.recordset[0]?.points;
+            if (typeof currentPoints !== 'number') {
+                const error = new Error('User for point event not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            if (currentPoints + pointDelta < 0) {
+                const error = new Error(
+                    `Insufficient points for deduction. Current points: ${currentPoints}, requested delta: ${pointDelta}.`
+                );
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const rewardRequest = new sql.Request(transaction);
+            rewardRequest.input('userId', sql.Int, pointEvent.userId);
+            rewardRequest.input('pointDelta', sql.Int, pointDelta);
+            rewardRequest.input('transactionType', sql.NVarChar(50), transactionType);
+            rewardRequest.input('description', sql.NVarChar(255), description);
+            rewardRequest.input('documentId', sql.Int, pointEvent.documentId);
+
+            const rewardResult = await rewardRequest.query(`
+                UPDATE dbo.Users
+                SET
+                    points = points + @pointDelta,
+                    updatedAt = SYSDATETIME()
+                WHERE userId = @userId;
+
+                INSERT INTO dbo.PointTransactions (
+                    userId,
+                    transactionType,
+                    points,
+                    description,
+                    documentId,
+                    answerId,
+                    reviewId
+                )
+                VALUES (
+                    @userId,
+                    @transactionType,
+                    @pointDelta,
+                    @description,
+                    @documentId,
+                    NULL,
+                    NULL
+                );
+
+                SELECT points AS userPointsAfter
+                FROM dbo.Users
+                WHERE userId = @userId;
+            `);
+
+            userPointsAfter = rewardResult.recordset[0]?.userPointsAfter ?? null;
         }
 
         await transaction.commit();

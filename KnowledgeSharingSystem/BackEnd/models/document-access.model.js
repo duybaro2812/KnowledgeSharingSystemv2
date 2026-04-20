@@ -210,6 +210,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
             dailyViewLimit: null,
             todayFullViewCount: 0,
             viewsRemainingToday: null,
+            previewPageLimit: null,
             downloadCost: 0,
             downloadConfirmation: null,
             lockedOverlay: null,
@@ -235,6 +236,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
             dailyViewLimit: 0,
             todayFullViewCount,
             viewsRemainingToday: 0,
+            previewPageLimit: POINT_POLICY.unlock.previewPageLimitWhenLocked || 5,
             downloadCost: null,
             downloadConfirmation: null,
             lockedOverlay: buildLockedPreviewOverlay({
@@ -263,6 +265,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
             dailyViewLimit: viewLimit,
             todayFullViewCount,
             viewsRemainingToday,
+            previewPageLimit: null,
             downloadCost: null,
             downloadConfirmation: null,
             lockedOverlay: null,
@@ -292,6 +295,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
         dailyViewLimit: null,
         todayFullViewCount,
         viewsRemainingToday: null,
+        previewPageLimit: null,
         downloadCost,
         downloadConfirmation: buildDownloadConfirmation({
             title: document.title,

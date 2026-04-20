@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const userModel = require('../models/user.model');
 const registrationOtpModel = require('../models/registration-otp.model');
 const { sendRegisterOtpEmail, sendPasswordResetOtpEmail } = require('../services/mail.service');
+const runtimeMetricsService = require('../services/runtime-metrics.service');
 const { VALIDATION_RULES } = require('../config/validation-rules');
 const {
     normalizeRequiredText,
@@ -13,6 +14,110 @@ const {
 } = require('../utils/input-sanitizer');
 
 const OTP_EXPIRE_MINUTES = Number(process.env.OTP_EXPIRE_MINUTES || 10);
+const AUTH_MAX_FAILED_ATTEMPTS = Number(process.env.AUTH_MAX_FAILED_ATTEMPTS || 5);
+const AUTH_LOCKOUT_WINDOW_MINUTES = Number(process.env.AUTH_LOCKOUT_WINDOW_MINUTES || 15);
+const AUTH_LOCKOUT_DURATION_MINUTES = Number(process.env.AUTH_LOCKOUT_DURATION_MINUTES || 15);
+const AUTH_ATTEMPT_STORE_MAX_SIZE = Number(process.env.AUTH_ATTEMPT_STORE_MAX_SIZE || 20000);
+const authAttemptStore = new Map();
+
+const getClientIp = (req) =>
+    String(req.headers['x-forwarded-for'] || '')
+        .split(',')[0]
+        .trim() ||
+    req.ip ||
+    req.connection?.remoteAddress ||
+    'unknown';
+
+const getAuthAttemptKey = (req, username) =>
+    `${String(username || '').toLowerCase()}:${getClientIp(req)}`;
+
+const cleanupAuthAttempts = (now) => {
+    if (authAttemptStore.size <= AUTH_ATTEMPT_STORE_MAX_SIZE) return;
+
+    for (const [key, entry] of authAttemptStore.entries()) {
+        if (!entry) {
+            authAttemptStore.delete(key);
+            continue;
+        }
+
+        const windowExpired = Number(entry.windowStartedAt || 0) + AUTH_LOCKOUT_WINDOW_MINUTES * 60 * 1000 <= now;
+        const lockExpired = Number(entry.lockedUntil || 0) <= now;
+
+        if (windowExpired && lockExpired) {
+            authAttemptStore.delete(key);
+        }
+    }
+};
+
+const readAuthAttemptState = (req, username) => {
+    const now = Date.now();
+    cleanupAuthAttempts(now);
+
+    const key = getAuthAttemptKey(req, username);
+    const entry = authAttemptStore.get(key);
+
+    if (!entry) {
+        return { key, count: 0, lockedUntil: 0, isLocked: false, retryAfterSeconds: 0 };
+    }
+
+    const windowExpired = Number(entry.windowStartedAt || 0) + AUTH_LOCKOUT_WINDOW_MINUTES * 60 * 1000 <= now;
+
+    if (windowExpired && Number(entry.lockedUntil || 0) <= now) {
+        authAttemptStore.delete(key);
+        return { key, count: 0, lockedUntil: 0, isLocked: false, retryAfterSeconds: 0 };
+    }
+
+    const isLocked = Number(entry.lockedUntil || 0) > now;
+    const retryAfterSeconds = isLocked ? Math.max(1, Math.ceil((entry.lockedUntil - now) / 1000)) : 0;
+
+    return {
+        key,
+        count: Number(entry.count || 0),
+        lockedUntil: Number(entry.lockedUntil || 0),
+        isLocked,
+        retryAfterSeconds,
+    };
+};
+
+const registerAuthFailure = (req, username) => {
+    const now = Date.now();
+    const key = getAuthAttemptKey(req, username);
+    const existing = authAttemptStore.get(key);
+
+    if (!existing || Number(existing.windowStartedAt || 0) + AUTH_LOCKOUT_WINDOW_MINUTES * 60 * 1000 <= now) {
+        authAttemptStore.set(key, {
+            count: 1,
+            windowStartedAt: now,
+            lockedUntil: 0,
+        });
+        return { isLocked: false, retryAfterSeconds: 0 };
+    }
+
+    const nextCount = Number(existing.count || 0) + 1;
+    const nextEntry = {
+        ...existing,
+        count: nextCount,
+    };
+
+    if (nextCount >= AUTH_MAX_FAILED_ATTEMPTS) {
+        nextEntry.lockedUntil = now + AUTH_LOCKOUT_DURATION_MINUTES * 60 * 1000;
+    }
+
+    authAttemptStore.set(key, nextEntry);
+
+    const isLocked = Number(nextEntry.lockedUntil || 0) > now;
+    return {
+        isLocked,
+        retryAfterSeconds: isLocked
+            ? Math.max(1, Math.ceil((nextEntry.lockedUntil - now) / 1000))
+            : 0,
+    };
+};
+
+const clearAuthFailures = (req, username) => {
+    const key = getAuthAttemptKey(req, username);
+    authAttemptStore.delete(key);
+};
 
 const createLoginHandler = (options = {}) => async (req, res, next) => {
     try {
@@ -26,40 +131,67 @@ const createLoginHandler = (options = {}) => async (req, res, next) => {
             minLength: VALIDATION_RULES.auth.passwordMin,
             maxLength: VALIDATION_RULES.auth.passwordMax,
         });
+        const attemptState = readAuthAttemptState(req, username);
+
+        if (attemptState.isLocked) {
+            runtimeMetricsService.recordAuthFailure();
+            const error = new Error('Too many failed login attempts. Please try again later.');
+            error.statusCode = 429;
+            error.retryAfterSeconds = attemptState.retryAfterSeconds;
+            throw error;
+        }
 
         const user = await userModel.findUserByUsername(username);
 
         if (!user) {
+            const failed = registerAuthFailure(req, username);
+            runtimeMetricsService.recordAuthFailure();
             const error = new Error('Invalid username or password.');
-            error.statusCode = 401;
+            error.statusCode = failed.isLocked ? 429 : 401;
+            if (failed.retryAfterSeconds) {
+                error.retryAfterSeconds = failed.retryAfterSeconds;
+            }
             throw error;
         }
 
         const isPasswordMatched = await bcrypt.compare(password, user.passwordHash);
 
         if (!isPasswordMatched) {
+            const failed = registerAuthFailure(req, username);
+            runtimeMetricsService.recordAuthFailure();
             const error = new Error('Invalid username or password.');
-            error.statusCode = 401;
+            error.statusCode = failed.isLocked ? 429 : 401;
+            if (failed.retryAfterSeconds) {
+                error.retryAfterSeconds = failed.retryAfterSeconds;
+            }
             throw error;
         }
 
         if (options.adminOnly && user.role !== 'admin') {
+            registerAuthFailure(req, username);
+            runtimeMetricsService.recordAuthFailure();
             const error = new Error('Only admin accounts can use this login.');
             error.statusCode = 403;
             throw error;
         }
 
         if (options.excludeAdmin && user.role === 'admin') {
+            registerAuthFailure(req, username);
+            runtimeMetricsService.recordAuthFailure();
             const error = new Error('Please use the admin login endpoint.');
             error.statusCode = 403;
             throw error;
         }
 
         if (!user.isActive) {
+            registerAuthFailure(req, username);
+            runtimeMetricsService.recordAuthFailure();
             const error = new Error('Your account has been locked.');
             error.statusCode = 403;
             throw error;
         }
+
+        clearAuthFailures(req, username);
 
         const token = jwt.sign(
             {

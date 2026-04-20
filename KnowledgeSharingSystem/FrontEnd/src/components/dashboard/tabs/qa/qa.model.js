@@ -2,6 +2,7 @@ export function createQaModel(input) {
   const userId = Number(input.user?.userId || 0);
 
   return {
+    isBusy: Boolean(input.isBusy),
     user: input.user || null,
     currentUserId: userId,
     sessions: Array.isArray(input.qaSessions) ? input.qaSessions : [],

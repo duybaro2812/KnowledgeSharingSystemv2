@@ -1,5 +1,6 @@
 const documentAccessModel = require('../models/document-access.model');
 const documentPreviewService = require('../services/document-preview.service');
+const { POINT_POLICY } = require('../config/point-policy');
 
 const parseDocumentId = (id) => {
     const documentId = Number(id);
@@ -11,6 +12,33 @@ const parseDocumentId = (id) => {
     }
 
     return documentId;
+};
+
+const buildGuestLockedOverlay = () => ({
+    title: 'Bạn chưa đăng nhập',
+    message: 'Bạn chưa đăng nhập, vui lòng đăng nhập hoặc đăng ký tài khoản.',
+    helperText: 'Đăng nhập hoặc tạo tài khoản để kiếm điểm, xem đầy đủ và tải tài liệu.',
+    requiredPoints: POINT_POLICY.unlock.previewThreshold,
+});
+
+const toViewerPayload = ({
+    documentId,
+    preparedViewer,
+    canFullView = false,
+}) => {
+    const previewViewerUrl = preparedViewer.viewerUrl
+        ? `/api/documents/${documentId}/preview/content`
+        : '';
+
+    return {
+        ...preparedViewer,
+        viewerUrl:
+            canFullView && preparedViewer.viewerUrl
+                ? `/api/documents/${documentId}/viewer/content`
+                : '',
+        previewViewerUrl,
+        blockedByPolicy: !canFullView,
+    };
 };
 
 const getDocumentAccessPolicy = async (req, res, next) => {
@@ -38,14 +66,11 @@ const getDocumentAccessPolicy = async (req, res, next) => {
                 documentId,
                 documentTitle: document.title,
                 originalFileName: document.originalFileName,
-                viewer: {
-                    ...preparedViewer,
-                    viewerUrl:
-                        policy.canFullView && preparedViewer.viewerUrl
-                            ? `/api/documents/${documentId}/viewer/content`
-                            : '',
-                    blockedByPolicy: !policy.canFullView,
-                },
+                viewer: toViewerPayload({
+                    documentId,
+                    preparedViewer,
+                    canFullView: policy.canFullView,
+                }),
                 ...policy,
             },
         });
@@ -98,13 +123,11 @@ const registerFullView = async (req, res, next) => {
                 documentId,
                 fileUrl: document.fileUrl,
                 originalFileName: document.originalFileName,
-                viewer: {
-                    ...preparedViewer,
-                    viewerUrl: preparedViewer.viewerUrl
-                        ? `/api/documents/${documentId}/viewer/content`
-                        : '',
-                    blockedByPolicy: false,
-                },
+                viewer: toViewerPayload({
+                    documentId,
+                    preparedViewer,
+                    canFullView: true,
+                }),
                 policy: refreshedPolicy,
             },
         });
@@ -216,16 +239,29 @@ const streamPreparedViewerContent = async (req, res, next) => {
         const viewerFile = await documentPreviewService.getPreparedDocumentViewerFile(documentId);
 
         if (!viewerFile) {
+            await documentPreviewService.getPreparedDocumentViewer({
+                documentId,
+                fileUrl: document.fileUrl,
+                originalFileName: document.originalFileName,
+                mimeType: document.mimeType,
+                title: document.title,
+                forcePrepare: true,
+            });
+        }
+
+        const preparedViewerFile = viewerFile || await documentPreviewService.getPreparedDocumentViewerFile(documentId);
+
+        if (!preparedViewerFile) {
             const error = new Error('Prepared viewer file is not available yet.');
             error.statusCode = 404;
             throw error;
         }
 
-        res.setHeader('Content-Type', viewerFile.mimeType);
+        res.setHeader('Content-Type', preparedViewerFile.mimeType);
         res.setHeader('Cache-Control', 'private, max-age=60');
         res.setHeader('X-Frame-Options', 'SAMEORIGIN');
         res.setHeader('Content-Disposition', 'inline');
-        res.sendFile(viewerFile.absolutePath);
+        res.sendFile(preparedViewerFile.absolutePath);
     } catch (error) {
         next(error);
     }
@@ -257,16 +293,111 @@ const getDocumentViewer = async (req, res, next) => {
                 documentTitle: document.title,
                 originalFileName: document.originalFileName,
                 policy,
+                viewer: toViewerPayload({
+                    documentId,
+                    preparedViewer,
+                    canFullView: policy.canFullView,
+                }),
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getPublicDocumentPreview = async (req, res, next) => {
+    try {
+        const documentId = parseDocumentId(req.params.id);
+        const document = await documentAccessModel.getDocumentForAccess(documentId);
+
+        if (!document || document.status !== 'approved') {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const preparedViewer = await documentPreviewService.getPreparedDocumentViewer({
+            documentId,
+            fileUrl: document.fileUrl,
+            originalFileName: document.originalFileName,
+            mimeType: document.mimeType,
+            title: document.title,
+        });
+
+        res.json({
+            success: true,
+            message: 'Public preview fetched successfully.',
+            data: {
+                documentId,
+                documentTitle: document.title,
+                originalFileName: document.originalFileName,
+                accessState: 'guest_locked',
+                points: 0,
+                requiredPoints: POINT_POLICY.unlock.previewThreshold,
+                previewPageLimit: POINT_POLICY.unlock.previewPageLimitWhenLocked || 5,
+                isLocked: true,
+                canPreview: true,
+                canFullView: false,
+                canDownload: false,
+                canComment: true,
+                canDiscuss: true,
+                canAskQuestion: true,
+                tier: 'guest_locked',
+                reason: 'Please login/register to unlock full access.',
+                lockedOverlay: buildGuestLockedOverlay(),
                 viewer: {
                     ...preparedViewer,
-                    viewerUrl:
-                        policy.canFullView && preparedViewer.viewerUrl
-                            ? `/api/documents/${documentId}/viewer/content`
-                            : '',
-                    blockedByPolicy: !policy.canFullView,
+                    viewerUrl: '',
+                    previewViewerUrl: preparedViewer.viewerUrl
+                        ? `/api/documents/${documentId}/preview/content`
+                        : '',
+                    blockedByPolicy: true,
                 },
             },
         });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const streamPublicPreviewContent = async (req, res, next) => {
+    try {
+        const documentId = parseDocumentId(req.params.id);
+        const document = await documentAccessModel.getDocumentForAccess(documentId);
+
+        if (!document || document.status !== 'approved') {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const viewerFile = await documentPreviewService.getPreparedDocumentViewerFile(documentId);
+
+        if (!viewerFile) {
+            await documentPreviewService.getPreparedDocumentViewer({
+                documentId,
+                fileUrl: document.fileUrl,
+                originalFileName: document.originalFileName,
+                mimeType: document.mimeType,
+                title: document.title,
+                forcePrepare: true,
+            });
+        }
+
+        const preparedViewerFile =
+            viewerFile || (await documentPreviewService.getPreparedDocumentViewerFile(documentId));
+
+        if (!preparedViewerFile) {
+            const error = new Error('Prepared preview file is not available yet.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        res.setHeader('Content-Type', preparedViewerFile.mimeType);
+        res.setHeader('Cache-Control', 'public, max-age=120');
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        res.setHeader('Content-Disposition', 'inline');
+        res.sendFile(preparedViewerFile.absolutePath);
     } catch (error) {
         next(error);
     }
@@ -278,4 +409,6 @@ module.exports = {
     registerDownload,
     streamPreparedViewerContent,
     getDocumentViewer,
+    getPublicDocumentPreview,
+    streamPublicPreviewContent,
 };
