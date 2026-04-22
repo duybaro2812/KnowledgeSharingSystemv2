@@ -1,19 +1,24 @@
-# Regression Checklist (Part 2)
+# Regression Checklist (PostgreSQL)
 
-## 1) Chuẩn bị
-- Chạy DB migration đầy đủ đến `DatabaseBusinessRules_Patch17.sql`.
-- Khởi động BackEnd.
-- (Khuyến nghị) seed dữ liệu demo:
+## 1) Setup
+
+- Ensure PostgreSQL schema is applied:
+  - `npm run db:pg:schema`
+- Start BackEnd:
+  - `npm run dev`
+- Optional demo seed:
   - `npm run seed:demo-data`
 
-## 2) Chạy test tự động
-- Smoke cơ bản:
+## 2) Automated checks
+
+- Smoke:
   - `npm run test:smoke`
-- Regression theo role:
+- Regression role matrix:
   - `npm run test:regression`
 
-## 3) Biến môi trường cho regression role matrix
-Khai báo trong `.env`:
+## 3) Optional credentials for role matrix
+
+Set in `.env`:
 
 ```env
 SMOKE_USERNAME=<user_username>
@@ -24,21 +29,22 @@ SMOKE_ADMIN_USERNAME=<admin_username>
 SMOKE_ADMIN_PASSWORD=<admin_password>
 ```
 
-## 4) Những gì script đang verify
-- Public endpoints hoạt động (`/health`, `/categories`, `/documents`).
-- Endpoint bảo vệ từ chối khi không token.
-- User:
-  - truy cập được `me`, `my-uploaded`, `notifications/my`.
-  - bị chặn khỏi admin/mod endpoints.
-- Moderator:
-  - truy cập được moderation stats/timeline.
-  - bị chặn khỏi admin users list.
-- Admin:
-  - truy cập được users list, audit logs, moderation stats.
+## 4) What scripts verify
 
-## 5) Manual regression bắt buộc trước deploy
-- Auth: login/register/OTP/forgot-password/reset.
-- Upload document + pending review.
-- Reader access policy theo points/guest.
-- Q&A full flow: create -> message -> close -> rate.
-- Notification deep-link điều hướng đúng màn hình.
+- Public endpoints (`/health`, `/categories`, `/documents`) are reachable.
+- Protected endpoint denies access without token.
+- User role:
+  - can access personal endpoints.
+  - is blocked from moderator/admin endpoints.
+- Moderator role:
+  - can access moderation endpoints.
+- Admin role:
+  - can access user management + audit endpoints.
+
+## 5) Manual regression before deploy
+
+- Auth: login/register/OTP/forgot/reset.
+- Upload document and moderation flow.
+- Reader access policy by points/guest.
+- Q&A flow: create -> message -> close -> rate.
+- Notifications deep-link to correct screens.

@@ -11,6 +11,7 @@ const startServer = async () => {
     try {
         validateEnv();
         await connectDB();
+
         await seedDefaultAdmin();
 
         app.listen(PORT, () => {

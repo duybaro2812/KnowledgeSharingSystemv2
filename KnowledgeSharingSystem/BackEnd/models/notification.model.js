@@ -1,4 +1,4 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 const notificationStream = require('../services/notification-stream.service');
 
 const parseMetadata = (value) => {
@@ -219,29 +219,51 @@ const createNotification = async ({ userId, type, title, message, metadata = nul
                 ? JSON.stringify(enrichedMetadata)
                 : null;
 
-    const result = await pool
-        .request()
-        .input('userId', sql.Int, userId)
-        .input('type', sql.NVarChar(50), type)
-        .input('title', sql.NVarChar(150), title)
-        .input('message', sql.NVarChar(500), message)
-        .input('metadata', sql.NVarChar(sql.MAX), metadataPayload)
-        .query(`
-            INSERT INTO dbo.Notifications (userId, type, title, message, metadata)
-            OUTPUT
-                inserted.notificationId,
-                inserted.userId,
-                inserted.type,
-                inserted.title,
-                inserted.message,
-                inserted.metadata,
-                inserted.isRead,
-                inserted.createdAt,
-                inserted.readAt
-            VALUES (@userId, @type, @title, @message, @metadata);
-        `);
+    let insertedRaw = null;
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                INSERT INTO notifications (user_id, type, title, message, metadata)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING
+                    notification_id AS "notificationId",
+                    user_id AS "userId",
+                    type,
+                    title,
+                    message,
+                    metadata,
+                    is_read AS "isRead",
+                    created_at AS "createdAt",
+                    read_at AS "readAt";
+            `,
+            [userId, type, title, message, metadataPayload]
+        );
+        insertedRaw = result.rows?.[0] || null;
+    } else {
+        const result = await pool
+            .request()
+            .input('userId', sql.Int, userId)
+            .input('type', sql.NVarChar(50), type)
+            .input('title', sql.NVarChar(150), title)
+            .input('message', sql.NVarChar(500), message)
+            .input('metadata', sql.NVarChar(sql.MAX), metadataPayload)
+            .query(`
+                INSERT INTO dbo.Notifications (userId, type, title, message, metadata)
+                OUTPUT
+                    inserted.notificationId,
+                    inserted.userId,
+                    inserted.type,
+                    inserted.title,
+                    inserted.message,
+                    inserted.metadata,
+                    inserted.isRead,
+                    inserted.createdAt,
+                    inserted.readAt
+                VALUES (@userId, @type, @title, @message, @metadata);
+            `);
+        insertedRaw = result.recordset?.[0] || null;
+    }
 
-    const insertedRaw = result.recordset?.[0] || null;
     const inserted = insertedRaw ? normalizeNotification(insertedRaw) : null;
 
     if (inserted) {
@@ -260,6 +282,29 @@ const createNotification = async ({ userId, type, title, message, metadata = nul
 const getMyNotifications = async ({ userId, isRead = null }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    notification_id AS "notificationId",
+                    user_id AS "userId",
+                    type,
+                    title,
+                    message,
+                    metadata,
+                    is_read AS "isRead",
+                    created_at AS "createdAt",
+                    read_at AS "readAt"
+                FROM notifications
+                WHERE user_id = $1
+                  AND ($2::BOOLEAN IS NULL OR is_read = $2)
+                ORDER BY created_at DESC, notification_id DESC;
+            `,
+            [userId, isRead]
+        );
+        return (result.rows || []).map(normalizeNotification);
+    }
+
     const result = await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -272,6 +317,21 @@ const getMyNotifications = async ({ userId, isRead = null }) => {
 const markNotificationAsRead = async ({ notificationId, userId }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                UPDATE notifications
+                SET
+                    is_read = TRUE,
+                    read_at = COALESCE(read_at, NOW())
+                WHERE notification_id = $1
+                  AND user_id = $2;
+            `,
+            [notificationId, userId]
+        );
+        return;
+    }
+
     await pool
         .request()
         .input('notificationId', sql.Int, notificationId)
@@ -281,6 +341,21 @@ const markNotificationAsRead = async ({ notificationId, userId }) => {
 
 const markAllNotificationsAsRead = async ({ userId }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE notifications
+                SET
+                    is_read = TRUE,
+                    read_at = COALESCE(read_at, NOW())
+                WHERE user_id = $1
+                  AND is_read = FALSE;
+            `,
+            [userId]
+        );
+        return Number(result.rowCount || 0);
+    }
 
     const result = await pool
         .request()
@@ -301,6 +376,24 @@ const markAllNotificationsAsRead = async ({ userId }) => {
 
 const getMyNotificationSummary = async ({ userId }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    COUNT(1)::INT AS "totalCount",
+                    SUM(CASE WHEN is_read = FALSE THEN 1 ELSE 0 END)::INT AS "unreadCount"
+                FROM notifications
+                WHERE user_id = $1;
+            `,
+            [userId]
+        );
+
+        return {
+            totalCount: Number(result.rows?.[0]?.totalCount || 0),
+            unreadCount: Number(result.rows?.[0]?.unreadCount || 0),
+        };
+    }
 
     const result = await pool
         .request()

@@ -1,6 +1,7 @@
 const requiredKeys = ['JWT_SECRET', 'DB_NAME'];
 
 const optionalButImportant = [
+    'DB_CLIENT',
     'DB_SERVER',
     'DB_USER',
     'DB_PASSWORD',
@@ -31,4 +32,3 @@ const validateEnv = () => {
 module.exports = {
     validateEnv,
 };
-

@@ -1,4 +1,4 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const toDateOnlyString = (date) => date.toISOString().slice(0, 10);
 
@@ -19,6 +19,83 @@ const getModerationStats = async ({ dateFrom = null, dateTo = null } = {}) => {
 
     const normalizedDateFrom = dateFrom || defaultRange.dateFrom;
     const normalizedDateTo = dateTo || defaultRange.dateTo;
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    (SELECT COUNT(1) FROM users) AS "totalUsers",
+                    (SELECT COUNT(1) FROM users WHERE is_active = TRUE) AS "activeUsers",
+                    (SELECT COUNT(1) FROM users WHERE is_active = FALSE) AS "lockedUsers",
+                    (SELECT COUNT(1) FROM users WHERE role = 'moderator') AS "totalModerators",
+                    (SELECT COUNT(1) FROM documents) AS "totalDocuments",
+                    (SELECT COUNT(1) FROM documents WHERE status = 'approved') AS "approvedDocuments",
+                    (SELECT COUNT(1) FROM documents WHERE status = 'rejected') AS "rejectedDocuments",
+                    (
+                        SELECT COUNT(1)
+                        FROM document_access_logs
+                        WHERE access_type = 'download'
+                    ) AS "totalDownloads",
+                    (
+                        SELECT COUNT(1)
+                        FROM document_access_logs
+                        WHERE access_type = 'download'
+                          AND access_date BETWEEN $1::DATE AND $2::DATE
+                    ) AS "downloadsInRange",
+                    (SELECT COUNT(1) FROM documents WHERE status = 'pending') AS "pendingDocuments",
+                    (SELECT COUNT(1) FROM comments WHERE status = 'pending') AS "pendingComments",
+                    (SELECT COUNT(1) FROM reports WHERE status IN ('pending', 'reviewed')) AS "pendingReports",
+                    (SELECT COUNT(1) FROM point_events WHERE status = 'pending') AS "pendingPointEvents",
+                    (
+                        SELECT COUNT(1)
+                        FROM document_plagiarism_reviews
+                        WHERE created_at::DATE BETWEEN $1::DATE AND $2::DATE
+                    ) AS "plagiarismReviewsInRange",
+                    (
+                        SELECT COUNT(1)
+                        FROM comments
+                        WHERE reviewed_at IS NOT NULL
+                          AND reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+                    ) AS "commentsReviewedInRange",
+                    (
+                        SELECT COUNT(1)
+                        FROM reports
+                        WHERE reviewed_at IS NOT NULL
+                          AND reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+                    ) AS "reportsReviewedInRange",
+                    (
+                        SELECT COUNT(1)
+                        FROM point_events
+                        WHERE reviewed_at IS NOT NULL
+                          AND reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+                    ) AS "pointEventsReviewedInRange",
+                    (
+                        SELECT COUNT(1)
+                        FROM documents
+                        WHERE status = 'hidden'
+                    ) AS "lockedDocuments",
+                    (
+                        SELECT COUNT(1)
+                        FROM reports
+                        WHERE status = 'resolved'
+                          AND reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+                    ) AS "resolvedReportsInRange",
+                    (
+                        SELECT COUNT(1)
+                        FROM reports
+                        WHERE status = 'dismissed'
+                          AND reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+                    ) AS "dismissedReportsInRange";
+            `,
+            [normalizedDateFrom, normalizedDateTo]
+        );
+
+        return {
+            ...(result.rows[0] || {}),
+            dateFrom: normalizedDateFrom,
+            dateTo: normalizedDateTo,
+        };
+    }
 
     const request = pool.request();
     request.input('dateFrom', sql.Date, normalizedDateFrom);
@@ -211,6 +288,222 @@ const getModerationTimeline = async ({
     const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
     const safeOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
     const normalizedSource = source ? String(source).trim().toLowerCase() : null;
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                WITH timeline AS (
+                    SELECT
+                        'admin_action'::TEXT AS source,
+                        al.log_id::BIGINT AS "sourceId",
+                        al.created_at AS "createdAt",
+                        al.action_type AS action,
+                        al.actor_user_id AS "actorUserId",
+                        actor.name AS "actorName",
+                        actor.role AS "actorRole",
+                        'user'::TEXT AS "targetType",
+                        al.target_user_id AS "targetId",
+                        target_user.name AS "targetName",
+                        NULL::TEXT AS decision,
+                        al.note AS note
+                    FROM admin_action_logs al
+                    INNER JOIN users actor ON actor.user_id = al.actor_user_id
+                    INNER JOIN users target_user ON target_user.user_id = al.target_user_id
+                    WHERE al.created_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+
+                    SELECT
+                        'document_action'::TEXT AS source,
+                        ual.log_id::BIGINT AS "sourceId",
+                        ual.created_at AS "createdAt",
+                        ual.action AS action,
+                        ual.user_id AS "actorUserId",
+                        actor.name AS "actorName",
+                        actor.role AS "actorRole",
+                        ual.target_type AS "targetType",
+                        ual.target_id AS "targetId",
+                        d.title AS "targetName",
+                        NULL::TEXT AS decision,
+                        NULL::TEXT AS note
+                    FROM user_activity_logs ual
+                    INNER JOIN users actor ON actor.user_id = ual.user_id
+                    LEFT JOIN documents d ON d.document_id = ual.target_id AND ual.target_type = 'document'
+                    WHERE ual.action IN (
+                        'lock_document',
+                        'unlock_document',
+                        'delete_document',
+                        'resolve_report_unlock_document',
+                        'deduct_points_on_delete'
+                    )
+                      AND ual.created_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+
+                    SELECT
+                        'plagiarism_review'::TEXT AS source,
+                        pr.plagiarism_review_id::BIGINT AS "sourceId",
+                        pr.created_at AS "createdAt",
+                        'review_plagiarism'::TEXT AS action,
+                        pr.reviewed_by_user_id AS "actorUserId",
+                        actor.name AS "actorName",
+                        actor.role AS "actorRole",
+                        'document'::TEXT AS "targetType",
+                        pr.document_id AS "targetId",
+                        d.title AS "targetName",
+                        pr.decision AS decision,
+                        pr.note AS note
+                    FROM document_plagiarism_reviews pr
+                    INNER JOIN users actor ON actor.user_id = pr.reviewed_by_user_id
+                    LEFT JOIN documents d ON d.document_id = pr.document_id
+                    WHERE pr.created_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+
+                    SELECT
+                        'report_review'::TEXT AS source,
+                        r.report_id::BIGINT AS "sourceId",
+                        r.reviewed_at AS "createdAt",
+                        'review_report'::TEXT AS action,
+                        r.reviewed_by_user_id AS "actorUserId",
+                        actor.name AS "actorName",
+                        actor.role AS "actorRole",
+                        'document'::TEXT AS "targetType",
+                        r.document_id AS "targetId",
+                        d.title AS "targetName",
+                        r.status AS decision,
+                        r.review_note AS note
+                    FROM reports r
+                    INNER JOIN users actor ON actor.user_id = r.reviewed_by_user_id
+                    LEFT JOIN documents d ON d.document_id = r.document_id
+                    WHERE r.reviewed_at IS NOT NULL
+                      AND r.reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+
+                    SELECT
+                        'comment_review'::TEXT AS source,
+                        c.comment_id::BIGINT AS "sourceId",
+                        c.reviewed_at AS "createdAt",
+                        'review_comment'::TEXT AS action,
+                        c.reviewed_by_user_id AS "actorUserId",
+                        actor.name AS "actorName",
+                        actor.role AS "actorRole",
+                        'comment'::TEXT AS "targetType",
+                        c.comment_id AS "targetId",
+                        LEFT(c.content, 150) AS "targetName",
+                        c.status AS decision,
+                        c.review_note AS note
+                    FROM comments c
+                    INNER JOIN users actor ON actor.user_id = c.reviewed_by_user_id
+                    WHERE c.reviewed_at IS NOT NULL
+                      AND c.reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+
+                    SELECT
+                        'point_review'::TEXT AS source,
+                        pe.event_id::BIGINT AS "sourceId",
+                        pe.reviewed_at AS "createdAt",
+                        'review_point_event'::TEXT AS action,
+                        pe.reviewed_by_user_id AS "actorUserId",
+                        actor.name AS "actorName",
+                        actor.role AS "actorRole",
+                        'point_event'::TEXT AS "targetType",
+                        pe.event_id AS "targetId",
+                        pe.event_type AS "targetName",
+                        pe.status AS decision,
+                        pe.review_note AS note
+                    FROM point_events pe
+                    INNER JOIN users actor ON actor.user_id = pe.reviewed_by_user_id
+                    WHERE pe.reviewed_at IS NOT NULL
+                      AND pe.reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+                ),
+                filtered AS (
+                    SELECT *
+                    FROM timeline
+                    WHERE ($3::INT IS NULL OR "actorUserId" = $3)
+                      AND ($4::TEXT IS NULL OR source = $4)
+                )
+                SELECT *
+                FROM filtered
+                ORDER BY "createdAt" DESC, "sourceId" DESC
+                OFFSET $5 LIMIT $6;
+            `,
+            [
+                normalizedDateFrom,
+                normalizedDateTo,
+                actorUserId,
+                normalizedSource,
+                safeOffset,
+                safeLimit,
+            ]
+        );
+
+        const countResult = await pool.query(
+            `
+                WITH timeline AS (
+                    SELECT 'admin_action'::TEXT AS source, al.log_id::BIGINT AS "sourceId", al.created_at AS "createdAt", al.actor_user_id AS "actorUserId"
+                    FROM admin_action_logs al
+                    WHERE al.created_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+                    SELECT 'document_action'::TEXT AS source, ual.log_id::BIGINT AS "sourceId", ual.created_at AS "createdAt", ual.user_id AS "actorUserId"
+                    FROM user_activity_logs ual
+                    WHERE ual.action IN (
+                        'lock_document',
+                        'unlock_document',
+                        'delete_document',
+                        'resolve_report_unlock_document',
+                        'deduct_points_on_delete'
+                    )
+                      AND ual.created_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+                    SELECT 'plagiarism_review'::TEXT AS source, pr.plagiarism_review_id::BIGINT AS "sourceId", pr.created_at AS "createdAt", pr.reviewed_by_user_id AS "actorUserId"
+                    FROM document_plagiarism_reviews pr
+                    WHERE pr.created_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+                    SELECT 'report_review'::TEXT AS source, r.report_id::BIGINT AS "sourceId", r.reviewed_at AS "createdAt", r.reviewed_by_user_id AS "actorUserId"
+                    FROM reports r
+                    WHERE r.reviewed_at IS NOT NULL
+                      AND r.reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+                    SELECT 'comment_review'::TEXT AS source, c.comment_id::BIGINT AS "sourceId", c.reviewed_at AS "createdAt", c.reviewed_by_user_id AS "actorUserId"
+                    FROM comments c
+                    WHERE c.reviewed_at IS NOT NULL
+                      AND c.reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+
+                    UNION ALL
+                    SELECT 'point_review'::TEXT AS source, pe.event_id::BIGINT AS "sourceId", pe.reviewed_at AS "createdAt", pe.reviewed_by_user_id AS "actorUserId"
+                    FROM point_events pe
+                    WHERE pe.reviewed_at IS NOT NULL
+                      AND pe.reviewed_at::DATE BETWEEN $1::DATE AND $2::DATE
+                )
+                SELECT COUNT(1)::INT AS "totalRows"
+                FROM timeline
+                WHERE ($3::INT IS NULL OR "actorUserId" = $3)
+                  AND ($4::TEXT IS NULL OR source = $4);
+            `,
+            [normalizedDateFrom, normalizedDateTo, actorUserId, normalizedSource]
+        );
+
+        const rows = result.rows || [];
+        const totalRows = Number(countResult.rows?.[0]?.totalRows || 0);
+
+        return {
+            rows,
+            totalRows,
+            limit: safeLimit,
+            offset: safeOffset,
+            dateFrom: normalizedDateFrom,
+            dateTo: normalizedDateTo,
+            actorUserId: actorUserId || null,
+            source: normalizedSource,
+        };
+    }
 
     const request = pool.request();
     request.input('dateFrom', sql.Date, normalizedDateFrom);

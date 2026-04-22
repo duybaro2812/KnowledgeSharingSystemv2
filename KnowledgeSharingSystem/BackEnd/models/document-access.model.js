@@ -1,4 +1,4 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 const { POINT_POLICY } = require('../config/point-policy');
 
 const buildDownloadConfirmation = ({ title, downloadCost, points }) => {
@@ -27,6 +27,26 @@ const buildLockedPreviewOverlay = ({ points, requiredPoints }) => ({
 const getDocumentForAccess = async (documentId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    d.document_id AS "documentId",
+                    d.owner_user_id AS "ownerUserId",
+                    d.title,
+                    d.file_url AS "fileUrl",
+                    d.original_file_name AS "originalFileName",
+                    d.mime_type AS "mimeType",
+                    d.status
+                FROM documents d
+                WHERE d.document_id = $1;
+            `,
+            [documentId]
+        );
+
+        return result.rows[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -49,6 +69,18 @@ const getDocumentForAccess = async (documentId) => {
 const getUserPoints = async (userId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT points
+                FROM users
+                WHERE user_id = $1;
+            `,
+            [userId]
+        );
+        return Number(result.rows[0]?.points || 0);
+    }
+
     const result = await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -63,6 +95,21 @@ const getUserPoints = async (userId) => {
 
 const getTodayFullViewCount = async (userId) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT COUNT(1)::INT AS total
+                FROM document_access_logs
+                WHERE viewer_user_id = $1
+                  AND access_type = 'full_view'
+                  AND access_date = CURRENT_DATE;
+            `,
+            [userId]
+        );
+
+        return Number(result.rows[0]?.total || 0);
+    }
 
     const result = await pool
         .request()
@@ -80,6 +127,22 @@ const getTodayFullViewCount = async (userId) => {
 
 const createAccessLog = async ({ documentId, viewerUserId, accessType, pointsCost = 0 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                INSERT INTO document_access_logs (
+                    document_id,
+                    viewer_user_id,
+                    access_type,
+                    points_cost
+                )
+                VALUES ($1, $2, $3, $4);
+            `,
+            [documentId, viewerUserId, accessType, pointsCost]
+        );
+        return;
+    }
 
     await pool
         .request()
@@ -110,6 +173,67 @@ const chargeDownloadPoints = async ({
     description,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const userResult = await client.query(
+                `
+                    SELECT points
+                    FROM users
+                    WHERE user_id = $1
+                    FOR UPDATE;
+                `,
+                [userId]
+            );
+            const currentPoints = Number(userResult.rows[0]?.points || 0);
+
+            if (currentPoints < pointsCost) {
+                const error = new Error('Insufficient points for download.');
+                error.statusCode = 403;
+                throw error;
+            }
+
+            const updateResult = await client.query(
+                `
+                    UPDATE users
+                    SET
+                        points = points - $2,
+                        updated_at = NOW()
+                    WHERE user_id = $1
+                    RETURNING points AS "remainingPoints";
+                `,
+                [userId, pointsCost]
+            );
+
+            await client.query(
+                `
+                    INSERT INTO point_transactions (
+                        user_id,
+                        transaction_type,
+                        points,
+                        description,
+                        document_id,
+                        answer_id,
+                        review_id
+                    )
+                    VALUES ($1, 'download_cost', $2, $3, $4, NULL, NULL);
+                `,
+                [userId, -pointsCost, description, documentId]
+            );
+
+            await client.query('COMMIT');
+            return Number(updateResult.rows[0]?.remainingPoints || 0);
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     const transaction = new sql.Transaction(pool);
 
     await transaction.begin();

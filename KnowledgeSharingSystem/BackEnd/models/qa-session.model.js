@@ -1,7 +1,42 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const getSessionByIdForUser = async ({ sessionId, userId }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    qs.session_id AS "sessionId",
+                    qs.document_id AS "documentId",
+                    d.title AS "documentTitle",
+                    qs.asker_user_id AS "askerUserId",
+                    asker.name AS "askerName",
+                    qs.owner_user_id AS "ownerUserId",
+                    owner.name AS "ownerName",
+                    qs.status,
+                    qs.created_at AS "createdAt",
+                    qs.updated_at AS "updatedAt",
+                    qs.closed_at AS "closedAt",
+                    EXISTS (
+                        SELECT 1
+                        FROM session_ratings sr
+                        WHERE sr.session_id = qs.session_id
+                          AND sr.asker_user_id = $2
+                    ) AS "hasRatedByCurrentUser"
+                FROM question_sessions qs
+                INNER JOIN documents d ON d.document_id = qs.document_id
+                INNER JOIN users asker ON asker.user_id = qs.asker_user_id
+                INNER JOIN users owner ON owner.user_id = qs.owner_user_id
+                WHERE qs.session_id = $1
+                  AND ($2::INT IS NULL OR qs.asker_user_id = $2 OR qs.owner_user_id = $2)
+                LIMIT 1;
+            `,
+            [sessionId, userId]
+        );
+
+        return result.rows[0] || null;
+    }
 
     const result = await pool
         .request()
@@ -44,8 +79,70 @@ const getSessionByIdForUser = async ({ sessionId, userId }) => {
 
 const createSession = async ({ documentId, askerUserId, initialMessage = null }) => {
     const pool = getPool();
-    const transaction = new sql.Transaction(pool);
 
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const documentResult = await client.query(
+                `
+                    SELECT
+                        d.document_id AS "documentId",
+                        d.title,
+                        d.owner_user_id AS "ownerUserId",
+                        d.status
+                    FROM documents d
+                    WHERE d.document_id = $1
+                    LIMIT 1;
+                `,
+                [documentId]
+            );
+
+            const document = documentResult.rows[0];
+            if (!document) {
+                const error = new Error('Document not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            if (Number(document.ownerUserId) === Number(askerUserId)) {
+                const error = new Error('You cannot create a Q&A session for your own document.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const createResult = await client.query(
+                `
+                    INSERT INTO question_sessions (document_id, asker_user_id, owner_user_id, status)
+                    VALUES ($1, $2, $3, 'open')
+                    RETURNING session_id AS "sessionId";
+                `,
+                [documentId, askerUserId, document.ownerUserId]
+            );
+
+            const sessionId = createResult.rows[0].sessionId;
+            if (initialMessage && String(initialMessage).trim()) {
+                await client.query(
+                    `
+                        INSERT INTO question_messages (session_id, sender_user_id, message)
+                        VALUES ($1, $2, $3);
+                    `,
+                    [sessionId, askerUserId, String(initialMessage).trim()]
+                );
+            }
+
+            await client.query('COMMIT');
+            return getSessionByIdForUser({ sessionId, userId: askerUserId });
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     try {
@@ -63,7 +160,6 @@ const createSession = async ({ documentId, askerUserId, initialMessage = null })
         `);
 
         const document = documentResult.recordset[0];
-
         if (!document) {
             const error = new Error('Document not found.');
             error.statusCode = 404;
@@ -103,7 +199,6 @@ const createSession = async ({ documentId, askerUserId, initialMessage = null })
         }
 
         await transaction.commit();
-
         return getSessionByIdForUser({ sessionId, userId: askerUserId });
     } catch (error) {
         if (transaction._aborted !== true) {
@@ -115,6 +210,56 @@ const createSession = async ({ documentId, askerUserId, initialMessage = null })
 
 const getMySessions = async ({ userId, status = null }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    qs.session_id AS "sessionId",
+                    qs.document_id AS "documentId",
+                    d.title AS "documentTitle",
+                    qs.asker_user_id AS "askerUserId",
+                    asker.name AS "askerName",
+                    qs.owner_user_id AS "ownerUserId",
+                    owner.name AS "ownerName",
+                    qs.status,
+                    qs.created_at AS "createdAt",
+                    qs.updated_at AS "updatedAt",
+                    qs.closed_at AS "closedAt",
+                    last_msg.message AS "latestMessage",
+                    last_msg.created_at AS "latestMessageAt",
+                    COALESCE(msg_stats.total_messages, 0) AS "totalMessages",
+                    EXISTS (
+                        SELECT 1
+                        FROM session_ratings sr
+                        WHERE sr.session_id = qs.session_id
+                          AND sr.asker_user_id = $1
+                    ) AS "hasRatedByCurrentUser"
+                FROM question_sessions qs
+                INNER JOIN documents d ON d.document_id = qs.document_id
+                INNER JOIN users asker ON asker.user_id = qs.asker_user_id
+                INNER JOIN users owner ON owner.user_id = qs.owner_user_id
+                LEFT JOIN LATERAL (
+                    SELECT qm.message, qm.created_at
+                    FROM question_messages qm
+                    WHERE qm.session_id = qs.session_id
+                    ORDER BY qm.created_at DESC, qm.message_id DESC
+                    LIMIT 1
+                ) last_msg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(1)::INT AS total_messages
+                    FROM question_messages qm
+                    WHERE qm.session_id = qs.session_id
+                ) msg_stats ON TRUE
+                WHERE (qs.asker_user_id = $1 OR qs.owner_user_id = $1)
+                  AND ($2::TEXT IS NULL OR qs.status = $2)
+                ORDER BY qs.created_at DESC, qs.session_id DESC;
+            `,
+            [userId, status]
+        );
+
+        return result.rows;
+    }
 
     const result = await pool
         .request()
@@ -172,13 +317,36 @@ const getMySessions = async ({ userId, status = null }) => {
 
 const getSessionMessages = async ({ sessionId, userId }) => {
     const pool = getPool();
-
     const accessCheck = await getSessionByIdForUser({ sessionId, userId });
 
     if (!accessCheck) {
         const error = new Error('Q&A session not found or no permission.');
         error.statusCode = 404;
         throw error;
+    }
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    qm.message_id AS "messageId",
+                    qm.session_id AS "sessionId",
+                    qm.sender_user_id AS "senderUserId",
+                    u.name AS "senderName",
+                    qm.message,
+                    qm.created_at AS "createdAt"
+                FROM question_messages qm
+                INNER JOIN users u ON u.user_id = qm.sender_user_id
+                WHERE qm.session_id = $1
+                ORDER BY qm.created_at ASC, qm.message_id ASC;
+            `,
+            [sessionId]
+        );
+
+        return {
+            session: accessCheck,
+            messages: result.rows,
+        };
     }
 
     const result = await pool
@@ -206,8 +374,77 @@ const getSessionMessages = async ({ sessionId, userId }) => {
 
 const addSessionMessage = async ({ sessionId, senderUserId, message }) => {
     const pool = getPool();
-    const transaction = new sql.Transaction(pool);
 
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const sessionResult = await client.query(
+                `
+                    SELECT
+                        qs.session_id AS "sessionId",
+                        qs.asker_user_id AS "askerUserId",
+                        qs.owner_user_id AS "ownerUserId",
+                        qs.status
+                    FROM question_sessions qs
+                    WHERE qs.session_id = $1
+                      AND (qs.asker_user_id = $2 OR qs.owner_user_id = $2)
+                    FOR UPDATE;
+                `,
+                [sessionId, senderUserId]
+            );
+
+            const session = sessionResult.rows[0];
+            if (!session) {
+                const error = new Error('Q&A session not found or no permission.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            if (session.status !== 'open') {
+                const error = new Error('Cannot send message because this Q&A session is already closed.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const messageResult = await client.query(
+                `
+                    INSERT INTO question_messages (session_id, sender_user_id, message)
+                    VALUES ($1, $2, $3)
+                    RETURNING
+                        message_id AS "messageId",
+                        session_id AS "sessionId",
+                        sender_user_id AS "senderUserId",
+                        message,
+                        created_at AS "createdAt";
+                `,
+                [sessionId, senderUserId, message]
+            );
+
+            await client.query(
+                `
+                    UPDATE question_sessions
+                    SET updated_at = NOW()
+                    WHERE session_id = $1;
+                `,
+                [sessionId]
+            );
+
+            await client.query('COMMIT');
+            return {
+                session,
+                message: messageResult.rows[0],
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     try {
@@ -281,6 +518,43 @@ const addSessionMessage = async ({ sessionId, senderUserId, message }) => {
 const closeSession = async ({ sessionId, closedByUserId }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE question_sessions
+                SET
+                    status = 'closed',
+                    closed_at = COALESCE(closed_at, NOW()),
+                    updated_at = NOW()
+                WHERE session_id = $1
+                  AND status = 'open'
+                  AND (asker_user_id = $2 OR owner_user_id = $2)
+                RETURNING session_id;
+            `,
+            [sessionId, closedByUserId]
+        );
+
+        const affectedRows = result.rowCount || 0;
+
+        if (!affectedRows) {
+            const existing = await getSessionByIdForUser({ sessionId, userId: closedByUserId });
+
+            if (!existing) {
+                const error = new Error('Q&A session not found or no permission.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            if (existing.status !== 'open') {
+                const error = new Error('Q&A session is already closed.');
+                error.statusCode = 400;
+                throw error;
+            }
+        }
+
+        return getSessionByIdForUser({ sessionId, userId: closedByUserId });
+    }
+
     const result = await pool
         .request()
         .input('sessionId', sql.Int, sessionId)
@@ -321,8 +595,84 @@ const closeSession = async ({ sessionId, closedByUserId }) => {
 
 const rateSession = async ({ sessionId, askerUserId, stars, feedback = null }) => {
     const pool = getPool();
-    const transaction = new sql.Transaction(pool);
 
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const sessionResult = await client.query(
+                `
+                    SELECT
+                        qs.session_id AS "sessionId",
+                        qs.document_id AS "documentId",
+                        qs.asker_user_id AS "askerUserId",
+                        qs.owner_user_id AS "ownerUserId",
+                        qs.status
+                    FROM question_sessions qs
+                    WHERE qs.session_id = $1
+                      AND qs.asker_user_id = $2
+                    FOR UPDATE;
+                `,
+                [sessionId, askerUserId]
+            );
+
+            const session = sessionResult.rows[0];
+            if (!session) {
+                const error = new Error('Q&A session not found or no permission to rate.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            if (session.status !== 'closed') {
+                const error = new Error('Q&A session must be closed before rating.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const duplicateResult = await client.query(
+                `
+                    SELECT rating_id AS "ratingId"
+                    FROM session_ratings
+                    WHERE session_id = $1
+                      AND asker_user_id = $2
+                    LIMIT 1;
+                `,
+                [sessionId, askerUserId]
+            );
+
+            if (duplicateResult.rows[0]) {
+                const error = new Error('You already rated this Q&A session.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const ratingResult = await client.query(
+                `
+                    INSERT INTO session_ratings (session_id, asker_user_id, owner_user_id, stars, feedback)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING rating_id AS "ratingId";
+                `,
+                [sessionId, askerUserId, session.ownerUserId, stars, feedback]
+            );
+
+            await client.query('COMMIT');
+
+            return {
+                ratingId: ratingResult.rows[0].ratingId,
+                ...session,
+                stars,
+                feedback,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     try {

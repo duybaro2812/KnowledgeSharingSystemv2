@@ -1,4 +1,4 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const EVENT_TYPES = {
     UPLOAD_SUBMITTED: 'upload_submitted',
@@ -33,6 +33,70 @@ const createPointEvent = async ({
     metadata = null,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const metadataPayload = metadata ? JSON.stringify(metadata) : null;
+        const result = await pool.query(
+            `
+                WITH existing AS (
+                    SELECT pe.event_id AS "eventId", pe.status
+                    FROM point_events pe
+                    WHERE pe.user_id = $1
+                      AND pe.event_type = $2
+                      AND (
+                            ($2 IN ('upload_submitted', 'upload_approved')
+                                AND $4::INT IS NOT NULL
+                                AND pe.document_id = $4)
+                         OR ($2 IN ('comment_given', 'comment_received')
+                                AND $5::INT IS NOT NULL
+                                AND pe.comment_id = $5)
+                         OR ($2 = 'qa_session_rated'
+                                AND $6::INT IS NOT NULL
+                                AND pe.qa_session_id = $6)
+                         OR ($2 IN ('upvote_received', 'document_saved_by_other')
+                                AND $4::INT IS NOT NULL
+                                AND $7::INT IS NOT NULL
+                                AND pe.document_id = $4
+                                AND pe.source_user_id = $7)
+                      )
+                    ORDER BY pe.event_id DESC
+                    LIMIT 1
+                ),
+                inserted AS (
+                    INSERT INTO point_events (
+                        user_id,
+                        event_type,
+                        points,
+                        status,
+                        document_id,
+                        comment_id,
+                        qa_session_id,
+                        source_user_id,
+                        metadata
+                    )
+                    SELECT $1, $2, $3, 'pending', $4, $5, $6, $7, $8
+                    WHERE NOT EXISTS (SELECT 1 FROM existing)
+                    RETURNING event_id AS "eventId", status
+                )
+                SELECT * FROM inserted
+                UNION ALL
+                SELECT * FROM existing
+                LIMIT 1;
+            `,
+            [
+                userId,
+                eventType,
+                points,
+                documentId,
+                commentId,
+                qaSessionId,
+                sourceUserId,
+                metadataPayload,
+            ]
+        );
+
+        return result.rows[0] || null;
+    }
 
     const result = await pool
         .request()
@@ -156,6 +220,35 @@ const createPointEvent = async ({
 const getPendingPointEvents = async () => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    pe.event_id AS "eventId",
+                    pe.user_id AS "userId",
+                    u.username,
+                    u.name AS "userName",
+                    u.email AS "userEmail",
+                    pe.event_type AS "eventType",
+                    pe.points,
+                    pe.status,
+                    pe.document_id AS "documentId",
+                    pe.comment_id AS "commentId",
+                    pe.qa_session_id AS "qaSessionId",
+                    pe.source_user_id AS "sourceUserId",
+                    d.title AS "documentTitle",
+                    pe.metadata,
+                    pe.created_at AS "createdAt"
+                FROM point_events pe
+                INNER JOIN users u ON u.user_id = pe.user_id
+                LEFT JOIN documents d ON d.document_id = pe.document_id
+                WHERE pe.status = 'pending'
+                ORDER BY pe.created_at ASC, pe.event_id ASC;
+            `
+        );
+        return result.rows;
+    }
+
     const result = await pool.request().query(`
         SELECT
             pe.eventId,
@@ -191,6 +284,201 @@ const reviewPointEvent = async ({
     pointDeltaOverride = null,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const eventResult = await client.query(
+                `
+                    SELECT
+                        pe.event_id AS "eventId",
+                        pe.user_id AS "userId",
+                        pe.event_type AS "eventType",
+                        pe.points,
+                        pe.status,
+                        pe.document_id AS "documentId",
+                        pe.comment_id AS "commentId",
+                        pe.qa_session_id AS "qaSessionId"
+                    FROM point_events pe
+                    WHERE pe.event_id = $1
+                    FOR UPDATE;
+                `,
+                [eventId]
+            );
+            const pointEvent = eventResult.rows[0];
+
+            if (!pointEvent) {
+                const error = new Error('Point event not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            const previousStatus = String(pointEvent.status || '').toLowerCase();
+            const previousPoints = Number(pointEvent.points || 0);
+            const nextApprovedPoints = Number.isInteger(pointDeltaOverride)
+                ? pointDeltaOverride
+                : previousPoints;
+
+            let pointDelta = 0;
+            if (decision === 'approved') {
+                pointDelta = previousStatus === 'approved'
+                    ? nextApprovedPoints - previousPoints
+                    : nextApprovedPoints;
+            } else if (decision === 'rejected' && previousStatus === 'approved') {
+                pointDelta = -previousPoints;
+            }
+
+            await client.query(
+                `
+                    UPDATE point_events
+                    SET
+                        status = $2,
+                        reviewed_by_user_id = $3,
+                        review_note = $4,
+                        points = CASE
+                            WHEN $2 = 'approved' AND $5::INT IS NOT NULL THEN $5
+                            ELSE points
+                        END,
+                        reviewed_at = NOW()
+                    WHERE event_id = $1;
+                `,
+                [
+                    eventId,
+                    decision,
+                    reviewedByUserId,
+                    reviewNote,
+                    decision === 'approved' && Number.isInteger(nextApprovedPoints)
+                        ? nextApprovedPoints
+                        : null,
+                ]
+            );
+
+            let userPointsAfter = null;
+            let approvedPoints = null;
+
+            if (decision === 'approved') {
+                const transactionType = EVENT_TO_TRANSACTION_TYPE[pointEvent.eventType] || 'admin_adjustment';
+                approvedPoints = nextApprovedPoints;
+                const description =
+                    previousStatus === 'approved'
+                        ? `Point reward adjusted for event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`
+                        : `Point reward approved for event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`;
+
+                if (pointDelta !== 0) {
+                    const pointCheck = await client.query(
+                        `SELECT points FROM users WHERE user_id = $1 FOR UPDATE;`,
+                        [pointEvent.userId]
+                    );
+                    const currentPoints = pointCheck.rows[0]?.points;
+                    if (typeof currentPoints !== 'number') {
+                        const error = new Error('User for point event not found.');
+                        error.statusCode = 404;
+                        throw error;
+                    }
+                    if (currentPoints + pointDelta < 0) {
+                        const error = new Error(
+                            `Insufficient points for deduction. Current points: ${currentPoints}, requested delta: ${pointDelta}.`
+                        );
+                        error.statusCode = 400;
+                        throw error;
+                    }
+
+                    await client.query(
+                        `
+                            UPDATE users
+                            SET
+                                points = points + $2,
+                                updated_at = NOW()
+                            WHERE user_id = $1;
+                        `,
+                        [pointEvent.userId, pointDelta]
+                    );
+
+                    await client.query(
+                        `
+                            INSERT INTO point_transactions (
+                                user_id, transaction_type, points, description, document_id, answer_id, review_id
+                            )
+                            VALUES ($1, $2, $3, $4, $5, NULL, NULL);
+                        `,
+                        [pointEvent.userId, transactionType, pointDelta, description, pointEvent.documentId]
+                    );
+                }
+
+                const balance = await client.query(
+                    `SELECT points AS "userPointsAfter" FROM users WHERE user_id = $1;`,
+                    [pointEvent.userId]
+                );
+                userPointsAfter = balance.rows[0]?.userPointsAfter ?? null;
+            } else if (decision === 'rejected' && pointDelta !== 0) {
+                const transactionType = EVENT_TO_TRANSACTION_TYPE[pointEvent.eventType] || 'admin_adjustment';
+                const description = `Point reward reverted for rejected event ${pointEvent.eventType} (eventId=${pointEvent.eventId}).`;
+
+                const pointCheck = await client.query(
+                    `SELECT points FROM users WHERE user_id = $1 FOR UPDATE;`,
+                    [pointEvent.userId]
+                );
+                const currentPoints = pointCheck.rows[0]?.points;
+                if (typeof currentPoints !== 'number') {
+                    const error = new Error('User for point event not found.');
+                    error.statusCode = 404;
+                    throw error;
+                }
+                if (currentPoints + pointDelta < 0) {
+                    const error = new Error(
+                        `Insufficient points for deduction. Current points: ${currentPoints}, requested delta: ${pointDelta}.`
+                    );
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                await client.query(
+                    `
+                        UPDATE users
+                        SET
+                            points = points + $2,
+                            updated_at = NOW()
+                        WHERE user_id = $1;
+                    `,
+                    [pointEvent.userId, pointDelta]
+                );
+
+                await client.query(
+                    `
+                        INSERT INTO point_transactions (
+                            user_id, transaction_type, points, description, document_id, answer_id, review_id
+                        )
+                        VALUES ($1, $2, $3, $4, $5, NULL, NULL);
+                    `,
+                    [pointEvent.userId, transactionType, pointDelta, description, pointEvent.documentId]
+                );
+
+                const balance = await client.query(
+                    `SELECT points AS "userPointsAfter" FROM users WHERE user_id = $1;`,
+                    [pointEvent.userId]
+                );
+                userPointsAfter = balance.rows[0]?.userPointsAfter ?? null;
+            }
+
+            await client.query('COMMIT');
+
+            return {
+                ...pointEvent,
+                status: decision,
+                reviewedByUserId,
+                reviewNote,
+                approvedPoints,
+                userPointsAfter,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     const transaction = new sql.Transaction(pool);
 
     await transaction.begin();

@@ -1,7 +1,36 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
+
+const pgUserSelect = `
+    SELECT
+        user_id AS "userId",
+        username,
+        name,
+        email,
+        points,
+        password_hash AS "passwordHash",
+        role,
+        is_active AS "isActive",
+        is_verified AS "isVerified",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+    FROM users
+`;
 
 const registerUser = async ({ username, name, email, passwordHash, role }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                INSERT INTO users (username, name, email, password_hash, role)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING user_id AS "userId";
+            `,
+            [username, name, email, passwordHash, role]
+        );
+
+        return result.rows[0].userId;
+    }
 
     const result = await pool
         .request()
@@ -17,6 +46,11 @@ const registerUser = async ({ username, name, email, passwordHash, role }) => {
 
 const findUserByUsername = async (username) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(`${pgUserSelect} WHERE username = $1;`, [username]);
+        return result.rows[0] || null;
+    }
 
     const result = await pool
         .request()
@@ -44,6 +78,11 @@ const findUserByUsername = async (username) => {
 const findUserByEmail = async (email) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(`${pgUserSelect} WHERE email = $1;`, [email]);
+        return result.rows[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('email', sql.NVarChar(150), email)
@@ -70,6 +109,28 @@ const findUserByEmail = async (email) => {
 const getUserProfileById = async (userId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    user_id AS "userId",
+                    username,
+                    name,
+                    email,
+                    points,
+                    role,
+                    is_active AS "isActive",
+                    is_verified AS "isVerified",
+                    created_at AS "createdAt",
+                    updated_at AS "updatedAt"
+                FROM users
+                WHERE user_id = $1;
+            `,
+            [userId]
+        );
+        return result.rows[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -95,6 +156,18 @@ const getUserProfileById = async (userId) => {
 const setUserActiveStatus = async ({ userId, isActive }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                UPDATE users
+                SET is_active = $2
+                WHERE user_id = $1;
+            `,
+            [userId, Boolean(isActive)]
+        );
+        return;
+    }
+
     await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -104,6 +177,11 @@ const setUserActiveStatus = async ({ userId, isActive }) => {
 
 const getUsers = async () => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(`${pgUserSelect} ORDER BY "userId";`);
+        return result.rows;
+    }
 
     const result = await pool.request().query(`
         SELECT
@@ -127,6 +205,24 @@ const getUsers = async () => {
 const getActiveModeratorsAndAdmins = async () => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    user_id AS "userId",
+                    username,
+                    name,
+                    email,
+                    role
+                FROM users
+                WHERE is_active = TRUE
+                  AND role IN ('moderator', 'admin')
+                ORDER BY user_id;
+            `
+        );
+        return result.rows;
+    }
+
     const result = await pool.request().query(`
         SELECT
             userId,
@@ -145,6 +241,24 @@ const getActiveModeratorsAndAdmins = async () => {
 
 const getActiveModerators = async () => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    user_id AS "userId",
+                    username,
+                    name,
+                    email,
+                    role
+                FROM users
+                WHERE is_active = TRUE
+                  AND role = 'moderator'
+                ORDER BY user_id;
+            `
+        );
+        return result.rows;
+    }
 
     const result = await pool.request().query(`
         SELECT
@@ -165,6 +279,20 @@ const getActiveModerators = async () => {
 const updateUserRole = async ({ userId, role }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE users
+                SET role = $2
+                WHERE user_id = $1
+                  AND role <> 'admin'
+                RETURNING user_id;
+            `,
+            [userId, role]
+        );
+        return result.rowCount;
+    }
+
     const result = await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -184,6 +312,20 @@ const updateUserRole = async ({ userId, role }) => {
 const updateMyProfile = async ({ userId, name }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                UPDATE users
+                SET
+                    name = $2,
+                    updated_at = NOW()
+                WHERE user_id = $1;
+            `,
+            [userId, name]
+        );
+        return;
+    }
+
     await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -194,6 +336,11 @@ const updateMyProfile = async ({ userId, name }) => {
 
 const getUserAuthById = async (userId) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(`${pgUserSelect} WHERE user_id = $1;`, [userId]);
+        return result.rows[0] || null;
+    }
 
     const result = await pool
         .request()
@@ -220,6 +367,21 @@ const getUserAuthById = async (userId) => {
 const updatePassword = async ({ userId, passwordHash }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE users
+                SET
+                    password_hash = $2,
+                    updated_at = NOW()
+                WHERE user_id = $1
+                RETURNING user_id;
+            `,
+            [userId, passwordHash]
+        );
+        return result.rowCount;
+    }
+
     const result = await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -240,6 +402,20 @@ const updatePassword = async ({ userId, passwordHash }) => {
 const setUserVerified = async (userId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                UPDATE users
+                SET
+                    is_verified = TRUE,
+                    updated_at = NOW()
+                WHERE user_id = $1;
+            `,
+            [userId]
+        );
+        return;
+    }
+
     await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -254,6 +430,28 @@ const setUserVerified = async (userId) => {
 
 const softDeleteUserByAdmin = async ({ userId }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE users
+                SET
+                    is_active = FALSE,
+                    is_verified = FALSE,
+                    role = 'user',
+                    name = CONCAT('Deleted User #', user_id::TEXT),
+                    username = CONCAT('deleted_user_', user_id::TEXT),
+                    email = CONCAT('deleted_', user_id::TEXT, '@deleted.local'),
+                    updated_at = NOW()
+                WHERE user_id = $1
+                  AND role <> 'admin'
+                RETURNING user_id;
+            `,
+            [userId]
+        );
+
+        return result.rowCount;
+    }
 
     const result = await pool
         .request()

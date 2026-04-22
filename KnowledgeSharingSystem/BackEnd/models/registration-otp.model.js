@@ -1,4 +1,4 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const createOrReplaceRegistrationOtp = async ({
     username,
@@ -9,6 +9,28 @@ const createOrReplaceRegistrationOtp = async ({
     expiresAt,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                DELETE FROM registration_otps
+                WHERE (email = $1 OR username = $2)
+                  AND is_used = FALSE;
+
+                INSERT INTO registration_otps (
+                    username,
+                    name,
+                    email,
+                    password_hash,
+                    otp_code,
+                    expires_at
+                )
+                VALUES ($2, $3, $1, $4, $5, $6);
+            `,
+            [email, username, name, passwordHash, otpCode, expiresAt]
+        );
+        return;
+    }
 
     await pool
         .request()
@@ -45,6 +67,32 @@ const createOrReplaceRegistrationOtp = async ({
 const findLatestActiveOtpByEmail = async (email) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    otp_id AS "otpId",
+                    username,
+                    name,
+                    email,
+                    password_hash AS "passwordHash",
+                    otp_code AS "otpCode",
+                    expires_at AS "expiresAt",
+                    is_used AS "isUsed",
+                    created_at AS "createdAt",
+                    used_at AS "usedAt"
+                FROM registration_otps
+                WHERE email = $1
+                  AND is_used = FALSE
+                ORDER BY created_at DESC
+                LIMIT 1;
+            `,
+            [email]
+        );
+
+        return result.rows[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('email', sql.NVarChar(150), email)
@@ -72,6 +120,20 @@ const findLatestActiveOtpByEmail = async (email) => {
 const markOtpAsUsed = async (otpId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                UPDATE registration_otps
+                SET
+                    is_used = TRUE,
+                    used_at = NOW()
+                WHERE otp_id = $1;
+            `,
+            [otpId]
+        );
+        return;
+    }
+
     await pool
         .request()
         .input('otpId', sql.Int, otpId)
@@ -93,6 +155,28 @@ const createOrReplaceForgotPasswordOtp = async ({
     expiresAt,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                DELETE FROM registration_otps
+                WHERE email = $1
+                  AND is_used = FALSE;
+
+                INSERT INTO registration_otps (
+                    username,
+                    name,
+                    email,
+                    password_hash,
+                    otp_code,
+                    expires_at
+                )
+                VALUES ($2, $3, $1, $4, $5, $6);
+            `,
+            [email, username, name, passwordHash, otpCode, expiresAt]
+        );
+        return;
+    }
 
     await pool
         .request()

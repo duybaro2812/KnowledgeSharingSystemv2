@@ -1,9 +1,110 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const REPORT_AUTO_LOCK_THRESHOLD = 5;
 
 const createDocumentReport = async ({ documentId, reporterUserId, reason }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const docResult = await client.query(
+                `
+                    SELECT owner_user_id AS "ownerUserId", status AS "currentStatus"
+                    FROM documents
+                    WHERE document_id = $1
+                    FOR UPDATE;
+                `,
+                [documentId]
+            );
+            const doc = docResult.rows[0];
+            if (!doc) {
+                const error = new Error('Document not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+            if (Number(doc.ownerUserId) === Number(reporterUserId)) {
+                const error = new Error('You cannot report your own document.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const duplicate = await client.query(
+                `
+                    SELECT 1 AS ok
+                    FROM reports
+                    WHERE document_id = $1
+                      AND reporter_user_id = $2
+                    LIMIT 1;
+                `,
+                [documentId, reporterUserId]
+            );
+            if (duplicate.rows[0]) {
+                const error = new Error('You have already reported this document.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const reportInsert = await client.query(
+                `
+                    INSERT INTO reports (reporter_user_id, document_id, reason, status)
+                    VALUES ($1, $2, $3, 'pending')
+                    RETURNING report_id AS "reportId";
+                `,
+                [reporterUserId, documentId, reason]
+            );
+            const reportId = Number(reportInsert.rows[0].reportId);
+
+            const statResult = await client.query(
+                `
+                    SELECT COUNT(DISTINCT reporter_user_id)::INT AS "uniqueReporterCount"
+                    FROM reports
+                    WHERE document_id = $1
+                      AND status IN ('pending', 'reviewed');
+                `,
+                [documentId]
+            );
+            const uniqueReporterCount = Number(statResult.rows[0]?.uniqueReporterCount || 0);
+
+            let wasAutoLocked = false;
+            if (uniqueReporterCount > REPORT_AUTO_LOCK_THRESHOLD && doc.currentStatus !== 'hidden') {
+                await client.query(
+                    `
+                        UPDATE documents
+                        SET
+                            status = 'hidden',
+                            updated_at = NOW()
+                        WHERE document_id = $1;
+                    `,
+                    [documentId]
+                );
+                wasAutoLocked = true;
+            }
+
+            await client.query(
+                `
+                    INSERT INTO user_activity_logs (user_id, action, target_type, target_id)
+                    VALUES ($1, 'create_report', 'report', $2);
+                `,
+                [reporterUserId, reportId]
+            );
+
+            await client.query('COMMIT');
+            return {
+                reportId,
+                ownerUserId: Number(doc.ownerUserId),
+                uniqueReporterCount,
+                wasAutoLocked,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
 
     const result = await pool
         .request()
@@ -104,7 +205,6 @@ const getPendingDocumentReportQueue = async ({
     offset = 0,
 } = {}) => {
     const pool = getPool();
-    const request = pool.request();
 
     const normalizedStatus = String(reportStatus || 'open').toLowerCase();
     const safeLimit =
@@ -113,22 +213,74 @@ const getPendingDocumentReportQueue = async ({
             : 100;
     const safeOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
 
-    request.input('limit', sql.Int, safeLimit);
-    request.input('offset', sql.Int, safeOffset);
-
-    let reportWhereClause = "r.status IN (N'pending', N'reviewed')";
+    let reportWhereClause = "r.status IN ('pending', 'reviewed')";
 
     if (normalizedStatus === 'pending') {
-        reportWhereClause = "r.status = N'pending'";
+        reportWhereClause = "r.status = 'pending'";
     } else if (normalizedStatus === 'reviewed') {
-        reportWhereClause = "r.status = N'reviewed'";
+        reportWhereClause = "r.status = 'reviewed'";
     } else if (normalizedStatus === 'resolved') {
-        reportWhereClause = "r.status = N'resolved'";
+        reportWhereClause = "r.status = 'resolved'";
     } else if (normalizedStatus === 'dismissed') {
-        reportWhereClause = "r.status = N'dismissed'";
+        reportWhereClause = "r.status = 'dismissed'";
     } else if (normalizedStatus === 'closed') {
-        reportWhereClause = "r.status IN (N'resolved', N'dismissed')";
+        reportWhereClause = "r.status IN ('resolved', 'dismissed')";
     }
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    d.document_id AS "documentId",
+                    d.title,
+                    d.description,
+                    d.file_url AS "fileUrl",
+                    d.original_file_name AS "originalFileName",
+                    d.file_size_bytes AS "fileSizeBytes",
+                    d.mime_type AS "mimeType",
+                    d.status,
+                    d.created_at AS "createdAt",
+                    d.updated_at AS "updatedAt",
+                    d.owner_user_id AS "ownerUserId",
+                    owner_user.name AS "ownerName",
+                    owner_user.email AS "ownerEmail",
+                    report_stats.total_reports AS "totalReports",
+                    report_stats.unique_reporter_count AS "uniqueReporterCount",
+                    report_stats.latest_reported_at AS "latestReportedAt",
+                    latest_reason.reason AS "latestReportReason",
+                    latest_reason.status AS "latestReportStatus"
+                FROM documents d
+                INNER JOIN users owner_user ON owner_user.user_id = d.owner_user_id
+                INNER JOIN (
+                    SELECT
+                        r.document_id,
+                        COUNT(*)::INT AS total_reports,
+                        COUNT(DISTINCT r.reporter_user_id)::INT AS unique_reporter_count,
+                        MAX(r.created_at) AS latest_reported_at
+                    FROM reports r
+                    WHERE r.document_id IS NOT NULL
+                      AND ${reportWhereClause}
+                    GROUP BY r.document_id
+                ) report_stats ON report_stats.document_id = d.document_id
+                LEFT JOIN LATERAL (
+                    SELECT r.reason, r.status
+                    FROM reports r
+                    WHERE r.document_id = d.document_id
+                      AND ${reportWhereClause}
+                    ORDER BY r.created_at DESC, r.report_id DESC
+                    LIMIT 1
+                ) latest_reason ON TRUE
+                ORDER BY report_stats.unique_reporter_count DESC, report_stats.latest_reported_at DESC
+                LIMIT $1 OFFSET $2;
+            `,
+            [safeLimit, safeOffset]
+        );
+        return result.rows;
+    }
+
+    const request = pool.request();
+    request.input('limit', sql.Int, safeLimit);
+    request.input('offset', sql.Int, safeOffset);
 
     const result = await request.query(`
         SELECT
@@ -180,6 +332,19 @@ const getPendingDocumentReportQueue = async ({
 const getOpenReporterUserIdsByDocument = async (documentId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT DISTINCT r.reporter_user_id AS "reporterUserId"
+                FROM reports r
+                WHERE r.document_id = $1
+                  AND r.status IN ('pending', 'reviewed');
+            `,
+            [documentId]
+        );
+        return result.rows.map((row) => row.reporterUserId);
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -195,6 +360,34 @@ const getOpenReporterUserIdsByDocument = async (documentId) => {
 
 const getDocumentReports = async ({ documentId, status = null }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    r.report_id AS "reportId",
+                    r.document_id AS "documentId",
+                    r.reporter_user_id AS "reporterUserId",
+                    reporter.name AS "reporterName",
+                    reporter.email AS "reporterEmail",
+                    r.reason,
+                    r.status,
+                    r.reviewed_by_user_id AS "reviewedByUserId",
+                    reviewer.name AS "reviewedByName",
+                    r.review_note AS "reviewNote",
+                    r.created_at AS "createdAt",
+                    r.reviewed_at AS "reviewedAt"
+                FROM reports r
+                INNER JOIN users reporter ON reporter.user_id = r.reporter_user_id
+                LEFT JOIN users reviewer ON reviewer.user_id = r.reviewed_by_user_id
+                WHERE r.document_id = $1
+                  AND ($2::TEXT IS NULL OR r.status = $2)
+                ORDER BY r.created_at DESC, r.report_id DESC;
+            `,
+            [documentId, status]
+        );
+        return result.rows;
+    }
 
     const result = await pool
         .request()
@@ -232,6 +425,24 @@ const resolveOpenDocumentReports = async ({
     reviewNote = null,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE reports
+                SET
+                    status = $3,
+                    reviewed_by_user_id = $2,
+                    review_note = $4,
+                    reviewed_at = NOW()
+                WHERE document_id = $1
+                  AND status IN ('pending', 'reviewed');
+            `,
+            [documentId, reviewedByUserId, status, reviewNote]
+        );
+
+        return Number(result.rowCount || 0);
+    }
 
     const result = await pool
         .request()

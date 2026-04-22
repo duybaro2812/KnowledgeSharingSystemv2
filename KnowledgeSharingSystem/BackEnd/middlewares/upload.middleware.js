@@ -1,7 +1,5 @@
 const multer = require('multer');
 
-const MAX_DOCUMENT_FILE_SIZE = 15 * 1024 * 1024;
-
 const allowedMimeTypes = new Set([
     'application/pdf',
     'application/msword',
@@ -24,13 +22,9 @@ const fileFilter = (req, file, cb) => {
 
 const documentUploadMiddleware = multer({
     storage: multer.memoryStorage(),
-    limits: {
-        fileSize: MAX_DOCUMENT_FILE_SIZE,
-    },
     fileFilter,
 });
 
 module.exports = {
     documentUploadMiddleware,
-    MAX_DOCUMENT_FILE_SIZE,
 };

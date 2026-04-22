@@ -122,7 +122,7 @@ app.use(async (error, req, res, next) => {
 
     if (error.code === 'LIMIT_FILE_SIZE') {
         statusCode = 400;
-        message = 'Document file must not exceed 15MB.';
+        message = 'Document file upload failed due to size policy.';
     }
 
     if (isDocumentUploadApi && isUploadValidationError && req.user?.userId) {

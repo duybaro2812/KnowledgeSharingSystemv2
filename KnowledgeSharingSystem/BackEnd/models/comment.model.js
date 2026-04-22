@@ -1,4 +1,4 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const getCommentsByDocumentId = async ({
     documentId,
@@ -7,6 +7,74 @@ const getCommentsByDocumentId = async ({
     viewerRole = null,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    c.comment_id AS "commentId",
+                    c.document_id AS "documentId",
+                    c.parent_comment_id AS "parentCommentId",
+                    c.author_user_id AS "authorUserId",
+                    u.name AS "authorName",
+                    c.content,
+                    c.status,
+                    c.reviewed_by_user_id AS "reviewedByUserId",
+                    c.review_note AS "reviewNote",
+                    c.reviewed_at AS "reviewedAt",
+                    c.created_at AS "createdAt",
+                    c.updated_at AS "updatedAt",
+                    pe.event_id AS "pointEventId",
+                    pe.status AS "pointEventStatus",
+                    pe.points AS "pointEventPoints",
+                    pe.reviewed_at AS "pointEventReviewedAt",
+                    pe.review_note AS "pointEventReviewNote",
+                    pe.reviewed_by_user_id AS "pointEventReviewedByUserId",
+                    ru.name AS "pointEventReviewedByName"
+                FROM comments c
+                INNER JOIN users u ON u.user_id = c.author_user_id
+                INNER JOIN documents d ON d.document_id = c.document_id
+                LEFT JOIN LATERAL (
+                    SELECT
+                        pe_inner.event_id,
+                        pe_inner.status,
+                        pe_inner.points,
+                        pe_inner.reviewed_at,
+                        pe_inner.review_note,
+                        pe_inner.reviewed_by_user_id
+                    FROM point_events pe_inner
+                    WHERE pe_inner.comment_id = c.comment_id
+                      AND pe_inner.event_type = 'comment_given'
+                      AND pe_inner.user_id = c.author_user_id
+                    ORDER BY pe_inner.event_id DESC
+                    LIMIT 1
+                ) pe ON TRUE
+                LEFT JOIN users ru ON ru.user_id = pe.reviewed_by_user_id
+                WHERE c.document_id = $1
+                  AND (
+                        $2::BOOLEAN = TRUE
+                        OR c.status = 'approved'
+                        OR (
+                            $3::INT IS NOT NULL
+                            AND c.author_user_id = $3
+                            AND c.status IN ('pending', 'rejected')
+                        )
+                        OR (
+                            $4::TEXT IN ('moderator', 'admin')
+                            AND c.status IN ('pending', 'rejected')
+                        )
+                  )
+                  AND (
+                        $2::BOOLEAN = TRUE
+                        OR d.status = 'approved'
+                  )
+                ORDER BY c.created_at DESC;
+            `,
+            [documentId, includeHidden, viewerUserId, viewerRole]
+        );
+
+        return result.rows;
+    }
 
     const result = await pool
         .request()
@@ -80,6 +148,32 @@ const getCommentsByDocumentId = async ({
 const getCommentById = async (commentId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    c.comment_id AS "commentId",
+                    c.document_id AS "documentId",
+                    c.parent_comment_id AS "parentCommentId",
+                    c.author_user_id AS "authorUserId",
+                    u.name AS "authorName",
+                    c.content,
+                    c.status,
+                    c.reviewed_by_user_id AS "reviewedByUserId",
+                    c.review_note AS "reviewNote",
+                    c.reviewed_at AS "reviewedAt",
+                    c.created_at AS "createdAt",
+                    c.updated_at AS "updatedAt"
+                FROM comments c
+                INNER JOIN users u ON u.user_id = c.author_user_id
+                WHERE c.comment_id = $1;
+            `,
+            [commentId]
+        );
+
+        return result.rows[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('commentId', sql.Int, commentId)
@@ -108,6 +202,34 @@ const getCommentById = async (commentId) => {
 const createComment = async ({ documentId, authorUserId, content }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const checkDoc = await pool.query(
+            `
+                SELECT 1 AS ok
+                FROM documents
+                WHERE document_id = $1
+                  AND status = 'approved'
+                LIMIT 1;
+            `,
+            [documentId]
+        );
+        if (!checkDoc.rows[0]) {
+            const error = new Error('Chi duoc binh luan tren tai lieu da approved.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const result = await pool.query(
+            `
+                INSERT INTO comments (document_id, author_user_id, content, status)
+                VALUES ($1, $2, $3, 'approved')
+                RETURNING comment_id AS "commentId";
+            `,
+            [documentId, authorUserId, content]
+        );
+        return result.rows[0]?.commentId || null;
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -135,6 +257,57 @@ const createComment = async ({ documentId, authorUserId, content }) => {
 
 const createReplyComment = async ({ parentCommentId, authorUserId, content }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const parentResult = await pool.query(
+            `
+                SELECT c.document_id AS "documentId", c.status AS "parentStatus"
+                FROM comments c
+                WHERE c.comment_id = $1;
+            `,
+            [parentCommentId]
+        );
+
+        const parent = parentResult.rows[0];
+        if (!parent) {
+            const error = new Error('Parent comment not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (parent.parentStatus !== 'approved') {
+            const error = new Error('Cannot reply to a non-approved comment.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const documentCheck = await pool.query(
+            `
+                SELECT 1 AS ok
+                FROM documents
+                WHERE document_id = $1
+                  AND status = 'approved'
+                LIMIT 1;
+            `,
+            [parent.documentId]
+        );
+        if (!documentCheck.rows[0]) {
+            const error = new Error('Only approved documents can receive replies.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const insertResult = await pool.query(
+            `
+                INSERT INTO comments (document_id, parent_comment_id, author_user_id, content, status)
+                VALUES ($1, $2, $3, $4, 'approved')
+                RETURNING comment_id AS "commentId";
+            `,
+            [parent.documentId, parentCommentId, authorUserId, content]
+        );
+
+        return insertResult.rows[0]?.commentId || null;
+    }
 
     const result = await pool
         .request()
@@ -195,6 +368,20 @@ const createReplyComment = async ({ parentCommentId, authorUserId, content }) =>
 const updateCommentStatus = async ({ commentId, status }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE comments
+                SET
+                    status = $2,
+                    updated_at = NOW()
+                WHERE comment_id = $1;
+            `,
+            [commentId, status]
+        );
+        return Number(result.rowCount || 0);
+    }
+
     const result = await pool
         .request()
         .input('commentId', sql.Int, commentId)
@@ -215,6 +402,21 @@ const updateCommentStatus = async ({ commentId, status }) => {
 const getDocumentOwnerForComments = async (documentId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    d.document_id AS "documentId",
+                    d.title AS "documentTitle",
+                    d.owner_user_id AS "ownerUserId"
+                FROM documents d
+                WHERE d.document_id = $1;
+            `,
+            [documentId]
+        );
+        return result.rows[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -232,6 +434,23 @@ const getDocumentOwnerForComments = async (documentId) => {
 
 const getCommentParticipantUserIds = async ({ documentId, excludeUserId = null }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT DISTINCT c.author_user_id AS "userId"
+                FROM comments c
+                WHERE c.document_id = $1
+                  AND c.status = 'approved'
+                  AND ($2::INT IS NULL OR c.author_user_id <> $2);
+            `,
+            [documentId, excludeUserId]
+        );
+
+        return result.rows
+            .map((row) => Number(row.userId))
+            .filter((id) => Number.isInteger(id) && id > 0);
+    }
 
     const result = await pool
         .request()
@@ -253,6 +472,19 @@ const countRecentCommentsByUser = async ({ userId, windowSeconds }) => {
 
     const safeWindow = Number.isInteger(windowSeconds) && windowSeconds > 0 ? windowSeconds : 30;
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT COUNT(1)::INT AS total
+                FROM comments c
+                WHERE c.author_user_id = $1
+                  AND c.created_at >= (NOW() - (($2::TEXT || ' seconds')::INTERVAL));
+            `,
+            [userId, safeWindow]
+        );
+        return Number(result.rows[0]?.total || 0);
+    }
+
     const result = await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -272,6 +504,36 @@ const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, docume
 
     const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 100;
     const safeOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    c.comment_id AS "commentId",
+                    c.document_id AS "documentId",
+                    d.title AS "documentTitle",
+                    c.parent_comment_id AS "parentCommentId",
+                    c.author_user_id AS "authorUserId",
+                    u.name AS "authorName",
+                    c.content,
+                    c.status,
+                    c.reviewed_by_user_id AS "reviewedByUserId",
+                    c.review_note AS "reviewNote",
+                    c.reviewed_at AS "reviewedAt",
+                    c.created_at AS "createdAt",
+                    c.updated_at AS "updatedAt"
+                FROM comments c
+                INNER JOIN users u ON u.user_id = c.author_user_id
+                INNER JOIN documents d ON d.document_id = c.document_id
+                WHERE c.status = 'pending'
+                  AND ($3::INT IS NULL OR c.document_id = $3)
+                ORDER BY c.created_at ASC
+                LIMIT $1 OFFSET $2;
+            `,
+            [safeLimit, safeOffset, documentId]
+        );
+        return result.rows;
+    }
 
     const result = await pool
         .request()
@@ -308,6 +570,24 @@ const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, docume
 const reviewCommentStatus = async ({ commentId, decision, reviewerUserId, reviewNote = null }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE comments
+                SET
+                    status = $2,
+                    reviewed_by_user_id = $3,
+                    review_note = $4,
+                    reviewed_at = NOW(),
+                    updated_at = NOW()
+                WHERE comment_id = $1
+                  AND status = 'pending';
+            `,
+            [commentId, decision, reviewerUserId, reviewNote]
+        );
+        return Number(result.rowCount || 0);
+    }
+
     const result = await pool
         .request()
         .input('commentId', sql.Int, commentId)
@@ -333,6 +613,24 @@ const reviewCommentStatus = async ({ commentId, decision, reviewerUserId, review
 
 const getCommentRewardTargetUserId = async (commentId) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    c.comment_id AS "commentId",
+                    c.author_user_id AS "authorUserId",
+                    c.parent_comment_id AS "parentCommentId",
+                    COALESCE(pc.author_user_id, d.owner_user_id) AS "targetUserId"
+                FROM comments c
+                INNER JOIN documents d ON d.document_id = c.document_id
+                LEFT JOIN comments pc ON pc.comment_id = c.parent_comment_id
+                WHERE c.comment_id = $1;
+            `,
+            [commentId]
+        );
+        return result.rows[0] || null;
+    }
 
     const result = await pool
         .request()

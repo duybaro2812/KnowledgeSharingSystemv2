@@ -85,7 +85,7 @@ function UploadTabView(props) {
           <strong>
             {selectedFileName ? selectedFileName : "Drop your file here or click to browse"}
           </strong>
-          <span>Supports PDF, DOCX, PPTX, XLSX, TXT • Max 15MB</span>
+          <span>Supports PDF, DOCX, PPTX, XLSX, TXT</span>
         </label>
 
         <section className="upload-form-card">

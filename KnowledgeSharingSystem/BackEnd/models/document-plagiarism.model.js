@@ -1,7 +1,17 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const hasTextArtifactsTable = async () => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT to_regclass('public.document_text_artifacts') IS NOT NULL AS ok;
+            `
+        );
+        return Boolean(result.rows?.[0]?.ok);
+    }
+
     const result = await pool.request().query(`
         SELECT 1 AS ok
         WHERE OBJECT_ID(N'dbo.DocumentTextArtifacts', N'U') IS NOT NULL;
@@ -24,6 +34,41 @@ const upsertDocumentTextArtifact = async ({
     }
 
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                INSERT INTO document_text_artifacts (
+                    document_id,
+                    extracted_text,
+                    normalized_text,
+                    token_count,
+                    extraction_method,
+                    extraction_warning,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                ON CONFLICT (document_id)
+                DO UPDATE SET
+                    extracted_text = EXCLUDED.extracted_text,
+                    normalized_text = EXCLUDED.normalized_text,
+                    token_count = EXCLUDED.token_count,
+                    extraction_method = EXCLUDED.extraction_method,
+                    extraction_warning = EXCLUDED.extraction_warning,
+                    updated_at = NOW();
+            `,
+            [
+                documentId,
+                extractedText || null,
+                normalizedText || null,
+                Number(tokenCount) || 0,
+                extractionMethod || null,
+                extractionWarning || null,
+            ]
+        );
+        return true;
+    }
+
     await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -81,6 +126,34 @@ const getTextSimilarityCandidates = async ({ documentId, limit = 100 }) => {
     }
 
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    d.document_id AS "documentId",
+                    d.title,
+                    d.file_hash AS "fileHash",
+                    d.original_file_name AS "originalFileName",
+                    d.status,
+                    d.created_at AS "createdAt",
+                    d.owner_user_id AS "ownerUserId",
+                    u.name AS "ownerName",
+                    ta.normalized_text AS "normalizedText",
+                    ta.token_count AS "tokenCount"
+                FROM documents d
+                INNER JOIN document_text_artifacts ta ON ta.document_id = d.document_id
+                INNER JOIN users u ON u.user_id = d.owner_user_id
+                WHERE d.document_id <> $1
+                  AND d.status IN ('pending', 'approved', 'rejected')
+                ORDER BY d.created_at DESC, d.document_id DESC
+                LIMIT $2;
+            `,
+            [documentId, limit]
+        );
+        return result.rows || [];
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -115,6 +188,27 @@ const getDocumentTextArtifact = async (documentId) => {
     }
 
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    document_id AS "documentId",
+                    extracted_text AS "extractedText",
+                    normalized_text AS "normalizedText",
+                    token_count AS "tokenCount",
+                    extraction_method AS "extractionMethod",
+                    extraction_warning AS "extractionWarning",
+                    created_at AS "createdAt",
+                    updated_at AS "updatedAt"
+                FROM document_text_artifacts
+                WHERE document_id = $1;
+            `,
+            [documentId]
+        );
+        return result.rows?.[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)

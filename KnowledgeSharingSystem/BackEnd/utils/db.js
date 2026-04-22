@@ -1,86 +1,64 @@
-const authMode = process.env.DB_AUTH_MODE || 'sql';
-
-const rawServer = process.env.DB_SERVER || 'localhost';
-const [serverHost, instanceName] = rawServer.split('\\');
-const hasExplicitPort = Boolean(process.env.DB_PORT);
-
-const createCommonConfig = () => ({
-    server: serverHost,
-    database: process.env.DB_NAME,
-    connectionTimeout: 30000,
-    requestTimeout: 30000,
-    pool: {
-        max: 10,
-        min: 0,
-        idleTimeoutMillis: 30000,
-    },
-    options: {
-        encrypt: process.env.DB_ENCRYPT === 'true',
-        trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === 'true',
-        ...(!hasExplicitPort && instanceName ? { instanceName } : {}),
-    },
-    ...(hasExplicitPort ? { port: Number(process.env.DB_PORT) } : {}),
-});
+const dbClient = (process.env.DB_CLIENT || 'postgres').trim().toLowerCase();
 
 let sql;
 let dbConfig;
+let pgPool;
 
-if (authMode === 'windows') {
-    try {
-        sql = require('mssql/msnodesqlv8');
-    } catch (error) {
-        throw new Error(
-            'Windows Authentication requires the "msnodesqlv8" driver. Install it with: npm install msnodesqlv8'
-        );
-    }
+const createSqlTypeShim = () => ({
+    Int: 'Int',
+    BigInt: 'BigInt',
+    Bit: 'Bit',
+    DateTime2: 'DateTime2',
+    Float: 'Float',
+    NVarChar: () => 'NVarChar',
+    VarChar: () => 'VarChar',
+    Decimal: () => 'Decimal',
+});
 
-    dbConfig = {
-        ...createCommonConfig(),
-        driver: 'msnodesqlv8',
-        options: {
-            ...createCommonConfig().options,
-            trustedConnection: true,
-        },
-        connectionString: `Server=${process.env.DB_SERVER};Database=${process.env.DB_NAME};Trusted_Connection=Yes;Encrypt=${process.env.DB_ENCRYPT === 'true' ? 'Yes' : 'No'};TrustServerCertificate=${process.env.DB_TRUST_SERVER_CERTIFICATE === 'true' ? 'Yes' : 'No'};`,
-    };
-} else {
-    sql = require('mssql');
+const isPostgresClient = () => true;
 
-    dbConfig = {
-        ...createCommonConfig(),
-        user: process.env.DB_USER,
-        password: process.env.DB_PASSWORD,
-    };
+if (dbClient !== 'postgres') {
+    console.warn(
+        `[db] Unsupported DB_CLIENT="${dbClient}". Backend now runs in PostgreSQL-only mode. Falling back to postgres.`
+    );
 }
-
-let pool;
+sql = createSqlTypeShim();
+dbConfig = {
+    host: process.env.DB_SERVER || 'localhost',
+    port: Number(process.env.DB_PORT || 5432),
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    ssl:
+        process.env.DB_ENCRYPT === 'true'
+            ? { rejectUnauthorized: process.env.DB_TRUST_SERVER_CERTIFICATE !== 'true' }
+            : false,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 30000,
+};
 
 const connectDB = async () => {
-    if (pool) {
-        return pool;
-    }
-
-    pool = await sql.connect(dbConfig);
-    return pool;
+    if (pgPool) return pgPool;
+    const { Pool } = require('pg');
+    pgPool = new Pool(dbConfig);
+    await pgPool.query('SELECT 1 AS ok;');
+    return pgPool;
 };
 
 const getPool = () => {
-    if (!pool) {
+    if (!pgPool) {
         throw new Error('Database pool has not been initialized. Call connectDB() first.');
     }
-
-    return pool;
+    return pgPool;
 };
 
-const isConnected = () => {
-    if (!pool) return false;
-    return Boolean(pool.connected || pool.connecting);
-};
+const isConnected = () => Boolean(pgPool);
 
 const pingDB = async () => {
-    const activePool = pool || (await connectDB());
-    const result = await activePool.request().query('SELECT 1 AS ok;');
-    return Number(result?.recordset?.[0]?.ok || 0) === 1;
+    const activePool = await connectDB();
+    const result = await activePool.query('SELECT 1 AS ok;');
+    return Number(result?.rows?.[0]?.ok || 0) === 1;
 };
 
 module.exports = {
@@ -90,4 +68,5 @@ module.exports = {
     getPool,
     isConnected,
     pingDB,
+    isPostgresClient,
 };

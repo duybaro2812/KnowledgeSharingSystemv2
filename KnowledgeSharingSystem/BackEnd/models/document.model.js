@@ -1,4 +1,4 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 
 const normalizeCategoryIds = (categoryIds) => {
     if (Array.isArray(categoryIds)) {
@@ -28,6 +28,47 @@ const normalizeCategoryIds = (categoryIds) => {
 
 const searchApprovedDocuments = async ({ keyword, categoryId, categoryKeyword }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT DISTINCT
+                    d.document_id AS "documentId",
+                    d.title,
+                    d.description,
+                    d.file_url AS "fileUrl",
+                    d.original_file_name AS "originalFileName",
+                    d.file_size_bytes AS "fileSizeBytes",
+                    d.mime_type AS "mimeType",
+                    d.created_at AS "createdAt",
+                    d.updated_at AS "updatedAt",
+                    u.user_id AS "ownerUserId",
+                    u.name AS "ownerName"
+                FROM documents d
+                INNER JOIN users u ON u.user_id = d.owner_user_id
+                LEFT JOIN document_categories dc ON dc.document_id = d.document_id
+                LEFT JOIN categories c ON c.category_id = dc.category_id
+                WHERE d.status = 'approved'
+                  AND (
+                        $1::TEXT IS NULL
+                        OR d.title ILIKE ('%' || $1 || '%')
+                        OR COALESCE(d.description, '') ILIKE ('%' || $1 || '%')
+                  )
+                  AND (
+                        $2::INT IS NULL
+                        OR dc.category_id = $2
+                  )
+                  AND (
+                        $3::TEXT IS NULL
+                        OR c.name ILIKE ('%' || $3 || '%')
+                  )
+                ORDER BY d.created_at DESC;
+            `,
+            [keyword || null, categoryId || null, categoryKeyword || null]
+        );
+
+        return result.rows;
+    }
 
     const result = await pool
         .request()
@@ -74,6 +115,34 @@ const searchApprovedDocuments = async ({ keyword, categoryId, categoryKeyword })
 const getDocumentDetailById = async (documentId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    d.document_id AS "documentId",
+                    d.title,
+                    d.description,
+                    d.file_url AS "fileUrl",
+                    d.original_file_name AS "originalFileName",
+                    d.file_size_bytes AS "fileSizeBytes",
+                    d.mime_type AS "mimeType",
+                    d.file_hash AS "fileHash",
+                    d.status,
+                    d.created_at AS "createdAt",
+                    d.updated_at AS "updatedAt",
+                    u.user_id AS "ownerUserId",
+                    u.name AS "ownerName",
+                    u.email AS "ownerEmail"
+                FROM documents d
+                INNER JOIN users u ON u.user_id = d.owner_user_id
+                WHERE d.document_id = $1;
+            `,
+            [documentId]
+        );
+
+        return result.rows[0] || null;
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -94,6 +163,73 @@ const createDocument = async ({
     categoryIds,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const categoryIdsRaw = normalizeCategoryIds(categoryIds);
+        const parsedCategoryIds = categoryIdsRaw
+            ? categoryIdsRaw
+                .split(',')
+                .map((value) => Number(String(value).trim()))
+                .filter((value) => Number.isInteger(value) && value > 0)
+            : [];
+
+        const result = await pool.query(
+            `
+                WITH inserted AS (
+                    INSERT INTO documents (
+                        owner_user_id,
+                        title,
+                        description,
+                        file_url,
+                        original_file_name,
+                        file_size_bytes,
+                        mime_type,
+                        file_hash,
+                        status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+                    RETURNING document_id
+                )
+                SELECT document_id AS "documentId"
+                FROM inserted;
+            `,
+            [
+                ownerUserId,
+                title,
+                description || null,
+                fileUrl,
+                originalFileName,
+                fileSizeBytes,
+                mimeType,
+                fileHash || null,
+            ]
+        );
+
+        const createdDocumentId = result.rows[0].documentId;
+
+        if (parsedCategoryIds.length > 0) {
+            await pool.query(
+                `
+                    INSERT INTO document_categories (document_id, category_id)
+                    SELECT $1, category_id
+                    FROM (
+                        SELECT DISTINCT UNNEST($2::INT[]) AS category_id
+                    ) c;
+                `,
+                [createdDocumentId, parsedCategoryIds]
+            );
+        }
+
+        await pool.query(
+            `
+                INSERT INTO user_activity_logs (user_id, action, target_type, target_id)
+                VALUES ($1, 'create_document', 'document', $2);
+            `,
+            [ownerUserId, createdDocumentId]
+        );
+
+        return createdDocumentId;
+    }
 
     const result = await pool
         .request()
@@ -124,6 +260,65 @@ const updateDocument = async ({
 }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const categoryIdsRaw = normalizeCategoryIds(categoryIds);
+        const parsedCategoryIds = categoryIdsRaw
+            ? categoryIdsRaw
+                .split(',')
+                .map((value) => Number(String(value).trim()))
+                .filter((value) => Number.isInteger(value) && value > 0)
+            : [];
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                `
+                    UPDATE documents
+                    SET
+                        title = $2,
+                        description = $3,
+                        file_url = $4,
+                        original_file_name = $5,
+                        file_size_bytes = $6,
+                        mime_type = $7,
+                        file_hash = $8,
+                        updated_at = NOW()
+                    WHERE document_id = $1;
+                `,
+                [
+                    documentId,
+                    title,
+                    description || null,
+                    fileUrl,
+                    originalFileName,
+                    fileSizeBytes,
+                    mimeType,
+                    fileHash || null,
+                ]
+            );
+
+            await client.query(`DELETE FROM document_categories WHERE document_id = $1;`, [documentId]);
+            if (parsedCategoryIds.length > 0) {
+                await client.query(
+                    `
+                        INSERT INTO document_categories (document_id, category_id)
+                        SELECT $1, category_id
+                        FROM (SELECT DISTINCT UNNEST($2::INT[]) AS category_id) c;
+                    `,
+                    [documentId, parsedCategoryIds]
+                );
+            }
+            await client.query('COMMIT');
+            return;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -141,6 +336,26 @@ const updateDocument = async ({
 const findDuplicateDocumentCandidates = async (documentId) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    d.document_id AS "documentId",
+                    d.title,
+                    d.description,
+                    d.owner_user_id AS "ownerUserId",
+                    d.created_at AS "createdAt"
+                FROM documents d
+                WHERE d.document_id <> $1
+                  AND d.status = 'approved'
+                ORDER BY d.created_at DESC
+                LIMIT 30;
+            `,
+            [documentId]
+        );
+        return result.rows;
+    }
+
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -151,6 +366,46 @@ const findDuplicateDocumentCandidates = async (documentId) => {
 
 const getUploadedDocuments = async ({ ownerUserId = null, status = null }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    d.document_id AS "documentId",
+                    d.title,
+                    d.description,
+                    d.file_url AS "fileUrl",
+                    d.original_file_name AS "originalFileName",
+                    d.file_size_bytes AS "fileSizeBytes",
+                    d.mime_type AS "mimeType",
+                    d.file_hash AS "fileHash",
+                    d.status,
+                    d.created_at AS "createdAt",
+                    d.updated_at AS "updatedAt",
+                    d.owner_user_id AS "ownerUserId",
+                    u.name AS "ownerName",
+                    u.email AS "ownerEmail",
+                    latest_review.decision AS "latestReviewDecision",
+                    latest_review.note AS "latestReviewNote",
+                    latest_review.created_at AS "latestReviewedAt"
+                FROM documents d
+                INNER JOIN users u ON u.user_id = d.owner_user_id
+                LEFT JOIN LATERAL (
+                    SELECT dr.decision, dr.note, dr.created_at
+                    FROM document_reviews dr
+                    WHERE dr.document_id = d.document_id
+                    ORDER BY dr.created_at DESC
+                    LIMIT 1
+                ) latest_review ON TRUE
+                WHERE ($1::INT IS NULL OR d.owner_user_id = $1)
+                  AND ($2::TEXT IS NULL OR d.status = $2)
+                ORDER BY d.created_at DESC;
+            `,
+            [ownerUserId, status || null]
+        );
+        return result.rows;
+    }
+
     const request = pool.request();
 
     request.input('ownerUserId', sql.Int, ownerUserId);
@@ -201,6 +456,38 @@ const getPendingDocuments = async () => {
 const reviewDocument = async ({ documentId, moderatorUserId, decision, note = null }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const status = decision === 'approved' ? 'approved' : 'rejected';
+            await client.query(
+                `
+                    UPDATE documents
+                    SET
+                        status = $2,
+                        updated_at = NOW()
+                    WHERE document_id = $1;
+                `,
+                [documentId, status]
+            );
+            await client.query(
+                `
+                    INSERT INTO document_reviews (document_id, moderator_user_id, decision, note)
+                    VALUES ($1, $2, $3, $4);
+                `,
+                [documentId, moderatorUserId, decision, note]
+            );
+            await client.query('COMMIT');
+            return;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     await pool
         .request()
         .input('documentId', sql.Int, documentId)
@@ -212,6 +499,25 @@ const reviewDocument = async ({ documentId, moderatorUserId, decision, note = nu
 
 const updateDocumentStatus = async ({ documentId, status }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE documents
+                SET
+                    status = $2,
+                    updated_at = NOW()
+                WHERE document_id = $1;
+            `,
+            [documentId, status]
+        );
+        if (Number(result.rowCount || 0) === 0) {
+            const error = new Error('Document not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+        return;
+    }
 
     await pool
         .request()
@@ -234,6 +540,17 @@ const updateDocumentStatus = async ({ documentId, status }) => {
 const logDocumentModerationAction = async ({ userId, action, documentId }) => {
     const pool = getPool();
 
+    if (isPostgresClient()) {
+        await pool.query(
+            `
+                INSERT INTO user_activity_logs (user_id, action, target_type, target_id)
+                VALUES ($1, $2, $3, $4);
+            `,
+            [userId, action, 'document', documentId]
+        );
+        return;
+    }
+
     await pool
         .request()
         .input('userId', sql.Int, userId)
@@ -253,6 +570,118 @@ const deleteDocumentById = async ({
     penaltyNote = null,
 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const ownerResult = await client.query(
+                `
+                    SELECT owner_user_id AS "ownerUserId"
+                    FROM documents
+                    WHERE document_id = $1
+                    FOR UPDATE;
+                `,
+                [documentId]
+            );
+            const owner = ownerResult.rows[0];
+            if (!owner) {
+                const error = new Error('Document not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            await client.query(
+                `
+                    DELETE FROM point_transactions pt
+                    WHERE pt.document_id = $1
+                       OR pt.review_id IN (
+                            SELECT dr.review_id
+                            FROM document_reviews dr
+                            WHERE dr.document_id = $1
+                       )
+                       OR pt.answer_id IN (
+                            SELECT a.answer_id
+                            FROM answers a
+                            INNER JOIN questions q ON q.question_id = a.question_id
+                            WHERE q.document_id = $1
+                       );
+                `,
+                [documentId]
+            );
+            await client.query(`DELETE FROM reports WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM download_history WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM document_reviews WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM comments WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM questions WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM document_categories WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM document_reactions WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM saved_documents WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM documents WHERE document_id = $1;`, [documentId]);
+
+            await client.query(
+                `
+                    INSERT INTO user_activity_logs (user_id, action, target_type, target_id)
+                    VALUES ($1, 'delete_document', 'document', $2);
+                `,
+                [deletedByUserId, documentId]
+            );
+
+            let deductedPoints = 0;
+            if (penaltyPoints > 0) {
+                const pointsResult = await client.query(
+                    `SELECT points FROM users WHERE user_id = $1 FOR UPDATE;`,
+                    [owner.ownerUserId]
+                );
+                const currentPoints = Number(pointsResult.rows[0]?.points || 0);
+                deductedPoints = Math.min(currentPoints, Number(penaltyPoints || 0));
+
+                if (deductedPoints > 0) {
+                    await client.query(
+                        `
+                            UPDATE users
+                            SET
+                                points = points - $2,
+                                updated_at = NOW()
+                            WHERE user_id = $1;
+                        `,
+                        [owner.ownerUserId, deductedPoints]
+                    );
+
+                    await client.query(
+                        `
+                            INSERT INTO point_transactions (
+                                user_id, transaction_type, points, description, document_id, answer_id, review_id
+                            )
+                            VALUES ($1, 'penalty', $2, $3, NULL, NULL, NULL);
+                        `,
+                        [
+                            owner.ownerUserId,
+                            -deductedPoints,
+                            penaltyNote || `Penalty for violating document #${documentId}`,
+                        ]
+                    );
+
+                    await client.query(
+                        `
+                            INSERT INTO user_activity_logs (user_id, action, target_type, target_id)
+                            VALUES ($1, 'deduct_points_on_delete', 'user', $2);
+                        `,
+                        [deletedByUserId, owner.ownerUserId]
+                    );
+                }
+            }
+
+            await client.query('COMMIT');
+            return { deductedPoints };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
 
     const result = await pool
         .request()

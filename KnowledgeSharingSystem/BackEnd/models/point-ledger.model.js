@@ -1,8 +1,45 @@
-const { getPool, sql } = require('../utils/db');
+const { getPool, sql, isPostgresClient } = require('../utils/db');
 const { buildPointPolicyResponse } = require('../config/point-policy');
 
 const getMyPointSummary = async (userId) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    u.user_id AS "userId",
+                    u.username,
+                    u.name,
+                    u.points AS "currentPoints",
+                    COALESCE(tx.total_earned, 0)::INT AS "totalEarned",
+                    COALESCE(tx.total_spent, 0)::INT AS "totalSpent",
+                    COALESCE(ev.pending_events, 0)::INT AS "pendingEvents",
+                    COALESCE(ev.approved_events, 0)::INT AS "approvedEvents",
+                    COALESCE(ev.rejected_events, 0)::INT AS "rejectedEvents"
+                FROM users u
+                LEFT JOIN LATERAL (
+                    SELECT
+                        SUM(CASE WHEN pt.points > 0 THEN pt.points ELSE 0 END) AS total_earned,
+                        SUM(CASE WHEN pt.points < 0 THEN ABS(pt.points) ELSE 0 END) AS total_spent
+                    FROM point_transactions pt
+                    WHERE pt.user_id = u.user_id
+                ) tx ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT
+                        SUM(CASE WHEN pe.status = 'pending' THEN 1 ELSE 0 END) AS pending_events,
+                        SUM(CASE WHEN pe.status = 'approved' THEN 1 ELSE 0 END) AS approved_events,
+                        SUM(CASE WHEN pe.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_events
+                    FROM point_events pe
+                    WHERE pe.user_id = u.user_id
+                ) ev ON TRUE
+                WHERE u.user_id = $1;
+            `,
+            [userId]
+        );
+        return result.rows[0] || null;
+    }
+
     const request = pool.request();
     request.input('userId', sql.Int, userId);
 
@@ -41,6 +78,32 @@ const getMyPointSummary = async (userId) => {
 
 const getMyPointTransactions = async ({ userId, limit = 50 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    pt.transaction_id AS "transactionId",
+                    pt.user_id AS "userId",
+                    pt.transaction_type AS "transactionType",
+                    pt.points,
+                    pt.description,
+                    pt.document_id AS "documentId",
+                    d.title AS "documentTitle",
+                    pt.answer_id AS "answerId",
+                    pt.review_id AS "reviewId",
+                    pt.created_at AS "createdAt"
+                FROM point_transactions pt
+                LEFT JOIN documents d ON d.document_id = pt.document_id
+                WHERE pt.user_id = $1
+                ORDER BY pt.transaction_id DESC
+                LIMIT $2;
+            `,
+            [userId, limit]
+        );
+        return result.rows;
+    }
+
     const request = pool.request();
     request.input('userId', sql.Int, userId);
     request.input('limit', sql.Int, limit);
@@ -68,6 +131,40 @@ const getMyPointTransactions = async ({ userId, limit = 50 }) => {
 
 const getMyPointEvents = async ({ userId, status = null, limit = 50 }) => {
     const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    pe.event_id AS "eventId",
+                    pe.user_id AS "userId",
+                    pe.event_type AS "eventType",
+                    pe.points,
+                    pe.status,
+                    pe.document_id AS "documentId",
+                    d.title AS "documentTitle",
+                    pe.comment_id AS "commentId",
+                    pe.qa_session_id AS "qaSessionId",
+                    pe.source_user_id AS "sourceUserId",
+                    pe.metadata,
+                    pe.created_at AS "createdAt",
+                    pe.reviewed_by_user_id AS "reviewedByUserId",
+                    rv.name AS "reviewedByName",
+                    pe.review_note AS "reviewNote",
+                    pe.reviewed_at AS "reviewedAt"
+                FROM point_events pe
+                LEFT JOIN documents d ON d.document_id = pe.document_id
+                LEFT JOIN users rv ON rv.user_id = pe.reviewed_by_user_id
+                WHERE pe.user_id = $1
+                  AND ($2::TEXT IS NULL OR pe.status = $2)
+                ORDER BY pe.event_id DESC
+                LIMIT $3;
+            `,
+            [userId, status, limit]
+        );
+        return result.rows;
+    }
+
     const request = pool.request();
     request.input('userId', sql.Int, userId);
     request.input('status', sql.NVarChar(20), status);
