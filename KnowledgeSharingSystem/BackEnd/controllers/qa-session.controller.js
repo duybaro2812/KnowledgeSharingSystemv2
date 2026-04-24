@@ -2,6 +2,7 @@ const qaSessionModel = require('../models/qa-session.model');
 const pointEventModel = require('../models/point-event.model');
 const notificationModel = require('../models/notification.model');
 const { notifyModerators } = require('../services/notification-dispatcher.service');
+const qaRealtimeService = require('../services/qa-realtime.service');
 const { getSuggestedPointsByStars } = require('../config/point-policy');
 const { QA_SESSION_STATUSES } = require('../config/workflow-statuses');
 const { VALIDATION_RULES } = require('../config/validation-rules');
@@ -168,6 +169,15 @@ const sendMessage = async (req, res, next) => {
             console.error('Failed to notify new Q&A message:', notifyError.message);
         }
 
+        qaRealtimeService.broadcastToSession({
+            sessionId,
+            participantUserIds: [result.session.askerUserId, result.session.ownerUserId],
+            event: 'qa_message_created',
+            data: {
+                message: result.message,
+            },
+        });
+
         res.status(201).json({
             success: true,
             message: 'Message sent successfully.',
@@ -217,6 +227,17 @@ const closeSession = async (req, res, next) => {
         } catch (notifyError) {
             console.error('Failed to notify Q&A close:', notifyError.message);
         }
+
+        qaRealtimeService.broadcastToSession({
+            sessionId: session.sessionId,
+            participantUserIds: [session.askerUserId, session.ownerUserId],
+            event: 'qa_session_closed',
+            data: {
+                closedByUserId: req.user.userId,
+                closedAt: session.closedAt,
+                status: session.status,
+            },
+        });
 
         res.json({
             success: true,

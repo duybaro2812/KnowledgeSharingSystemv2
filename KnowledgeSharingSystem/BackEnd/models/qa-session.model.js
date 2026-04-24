@@ -410,14 +410,25 @@ const addSessionMessage = async ({ sessionId, senderUserId, message }) => {
 
             const messageResult = await client.query(
                 `
-                    INSERT INTO question_messages (session_id, sender_user_id, message)
-                    VALUES ($1, $2, $3)
-                    RETURNING
-                        message_id AS "messageId",
-                        session_id AS "sessionId",
-                        sender_user_id AS "senderUserId",
-                        message,
-                        created_at AS "createdAt";
+                    WITH inserted AS (
+                        INSERT INTO question_messages (session_id, sender_user_id, message)
+                        VALUES ($1, $2, $3)
+                        RETURNING
+                            message_id,
+                            session_id,
+                            sender_user_id,
+                            message,
+                            created_at
+                    )
+                    SELECT
+                        i.message_id AS "messageId",
+                        i.session_id AS "sessionId",
+                        i.sender_user_id AS "senderUserId",
+                        u.name AS "senderName",
+                        i.message,
+                        i.created_at AS "createdAt"
+                    FROM inserted i
+                    INNER JOIN users u ON u.user_id = i.sender_user_id;
                 `,
                 [sessionId, senderUserId, message]
             );
@@ -494,9 +505,11 @@ const addSessionMessage = async ({ sessionId, senderUserId, message }) => {
                 qm.messageId,
                 qm.sessionId,
                 qm.senderUserId,
+                u.name AS senderName,
                 qm.message,
                 qm.createdAt
             FROM dbo.QuestionMessages qm
+            INNER JOIN dbo.Users u ON u.userId = qm.senderUserId
             WHERE qm.sessionId = @sessionId
             ORDER BY qm.messageId DESC;
         `);

@@ -138,6 +138,10 @@ function AppController() {
   const topicPickerRef = useRef(null);
   const upvoteSyncSignatureRef = useRef("");
   const actionLocksRef = useRef(new Set());
+  const qaSocketRef = useRef(null);
+  const qaSocketReconnectTimerRef = useRef(null);
+  const qaSocketSubscriptionRef = useRef(0);
+  const activeQaSessionIdRef = useRef(0);
 
   const isModerator = hasModeratorRole(user?.role);
 
@@ -749,6 +753,65 @@ function AppController() {
     return unreadMap;
   };
 
+  const buildQaWsUrl = (authToken) => {
+    if (!authToken) return "";
+    const wsOrigin = API_ORIGIN.startsWith("https://")
+      ? API_ORIGIN.replace(/^https:\/\//, "wss://")
+      : API_ORIGIN.replace(/^http:\/\//, "ws://");
+    return `${wsOrigin}/ws/qa?token=${encodeURIComponent(authToken)}`;
+  };
+
+  const sendQaSocketPayload = (payload) => {
+    const socket = qaSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    try {
+      socket.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const mergeQaIncomingMessage = (incomingMessage) => {
+    const sessionId = Number(incomingMessage?.sessionId || 0);
+    if (!Number.isInteger(sessionId) || sessionId <= 0) return;
+
+    setQaMessages((prev) => {
+      if (Number(activeQaSessionIdRef.current || 0) !== sessionId) return prev;
+      const list = Array.isArray(prev) ? prev : [];
+      const messageId = Number(incomingMessage?.messageId || 0);
+      if (
+        Number.isInteger(messageId) &&
+        messageId > 0 &&
+        list.some((item) => Number(item?.messageId) === messageId)
+      ) {
+        return list;
+      }
+      return [...list, incomingMessage];
+    });
+
+    setQaSessions((prev) => {
+      const list = Array.isArray(prev) ? prev : [];
+      const next = list.map((session) => {
+        if (Number(session?.sessionId) !== sessionId) return session;
+        return {
+          ...session,
+          latestMessage: incomingMessage?.message || session.latestMessage,
+          latestMessageAt: incomingMessage?.createdAt || session.latestMessageAt,
+          updatedAt: incomingMessage?.createdAt || session.updatedAt,
+          totalMessages: Number(session?.totalMessages || 0) + 1,
+        };
+      });
+      next.sort((a, b) => {
+        const timeA = new Date(a?.latestMessageAt || a?.updatedAt || a?.createdAt || 0).getTime();
+        const timeB = new Date(b?.latestMessageAt || b?.updatedAt || b?.createdAt || 0).getTime();
+        if (timeA !== timeB) return timeB - timeA;
+        return Number(b?.sessionId || 0) - Number(a?.sessionId || 0);
+      });
+      return next;
+    });
+  };
+
   const loadQaSessions = async (statusFilter = qaFilter) => {
     if (!token) return [];
     const normalizedFilter = statusFilter === "all" ? "" : statusFilter;
@@ -811,6 +874,10 @@ function AppController() {
       }
     }, { actionKey: `qa:open:${sessionId}` });
   };
+
+  useEffect(() => {
+    activeQaSessionIdRef.current = Number(activeQaSession?.sessionId || 0);
+  }, [activeQaSession?.sessionId]);
 
   const createQaSession = async (documentId, initialMessage = "") => {
     const numericId = Number(documentId || 0);
@@ -1248,6 +1315,152 @@ function AppController() {
     if (Number(activeQaSession?.sessionId) === targetId) return;
     void openQaSession(targetId, { replace: true });
   }, [activeTab, querySessionId, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!token) {
+      if (qaSocketReconnectTimerRef.current) {
+        clearTimeout(qaSocketReconnectTimerRef.current);
+        qaSocketReconnectTimerRef.current = null;
+      }
+      if (qaSocketRef.current) {
+        try {
+          qaSocketRef.current.close();
+        } catch {
+          // no-op
+        }
+      }
+      qaSocketRef.current = null;
+      qaSocketSubscriptionRef.current = 0;
+      return undefined;
+    }
+
+    let isDisposed = false;
+    let reconnectAttempt = 0;
+
+    const connect = () => {
+      if (isDisposed) return;
+
+      const wsUrl = buildQaWsUrl(token);
+      if (!wsUrl) return;
+
+      let socket;
+      try {
+        socket = new WebSocket(wsUrl);
+      } catch {
+        return;
+      }
+      qaSocketRef.current = socket;
+
+      socket.onopen = () => {
+        reconnectAttempt = 0;
+        const targetSessionId = Number(activeQaSessionIdRef.current || 0);
+        if (targetSessionId > 0) {
+          sendQaSocketPayload({
+            type: "qa.subscribe",
+            sessionId: targetSessionId,
+          });
+          qaSocketSubscriptionRef.current = targetSessionId;
+        }
+      };
+
+      socket.onmessage = (event) => {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        const eventType = String(payload?.event || "").trim().toLowerCase();
+        if (eventType === "qa_message_created") {
+          const message = payload?.data?.message || null;
+          if (message) {
+            mergeQaIncomingMessage(message);
+          }
+          return;
+        }
+
+        if (eventType === "qa_session_closed") {
+          const sessionId = Number(payload?.data?.sessionId || 0);
+          if (!Number.isInteger(sessionId) || sessionId <= 0) return;
+          setQaSessions((prev) =>
+            (Array.isArray(prev) ? prev : []).map((session) =>
+              Number(session?.sessionId) === sessionId
+                ? {
+                    ...session,
+                    status: "closed",
+                    closedAt: payload?.data?.closedAt || session.closedAt,
+                    updatedAt: payload?.data?.closedAt || session.updatedAt,
+                  }
+                : session,
+            ),
+          );
+          setActiveQaSession((prev) =>
+            Number(prev?.sessionId) === sessionId
+              ? {
+                  ...prev,
+                  status: "closed",
+                  closedAt: payload?.data?.closedAt || prev?.closedAt,
+                  updatedAt: payload?.data?.closedAt || prev?.updatedAt,
+                }
+              : prev,
+          );
+        }
+      };
+
+      socket.onclose = () => {
+        if (qaSocketRef.current === socket) {
+          qaSocketRef.current = null;
+        }
+        if (isDisposed) return;
+        reconnectAttempt += 1;
+        const waitMs = Math.min(8000, 1200 * reconnectAttempt);
+        qaSocketReconnectTimerRef.current = setTimeout(connect, waitMs);
+      };
+    };
+
+    connect();
+
+    return () => {
+      isDisposed = true;
+      qaSocketSubscriptionRef.current = 0;
+      if (qaSocketReconnectTimerRef.current) {
+        clearTimeout(qaSocketReconnectTimerRef.current);
+        qaSocketReconnectTimerRef.current = null;
+      }
+      if (qaSocketRef.current) {
+        try {
+          qaSocketRef.current.close();
+        } catch {
+          // no-op
+        }
+        qaSocketRef.current = null;
+      }
+    };
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const nextSessionId = Number(activeQaSession?.sessionId || 0);
+    const currentSessionId = Number(qaSocketSubscriptionRef.current || 0);
+
+    if (currentSessionId > 0 && currentSessionId !== nextSessionId) {
+      sendQaSocketPayload({
+        type: "qa.unsubscribe",
+        sessionId: currentSessionId,
+      });
+      qaSocketSubscriptionRef.current = 0;
+    }
+
+    if (nextSessionId > 0) {
+      const sent = sendQaSocketPayload({
+        type: "qa.subscribe",
+        sessionId: nextSessionId,
+      });
+      if (sent) {
+        qaSocketSubscriptionRef.current = nextSessionId;
+      }
+    }
+  }, [activeQaSession?.sessionId]);
 
   useEffect(() => {
     if (!token) return undefined;
