@@ -1,0 +1,52 @@
+services:
+  - type: web
+    name: neushare-backend
+    runtime: node
+    rootDir: BackEnd
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_CLIENT
+        value: postgres
+      - key: DB_AUTH_MODE
+        value: sql
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: DB_ENCRYPT
+        value: true
+      - key: DB_TRUST_SERVER_CERTIFICATE
+        value: false
+      - key: UPLOAD_DIR
+        value: uploads
+      - key: OTP_DEV_FALLBACK
+        value: false
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_DOCUMENT_FOLDER
+        value: knowledge-sharing-system/documents
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_SECURE
+        value: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false

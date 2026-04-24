@@ -10,13 +10,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "debug": "nodemon --inspect index.js",
-    "seed:test-data": "node scripts/seed-test-data.js",
-    "seed:demo-data": "node scripts/seed-demo-data.js",
-    "db:pg:schema": "node scripts/apply-postgres-schema.js",
-    "test:basic": "node scripts/check-backend.js",
-    "test:smoke": "node scripts/smoke-api.js",
-    "test:regression": "node scripts/regression-workflows.js",
-    "test": "npm run test:basic"
+    "db:pg:schema": "node scripts/apply-postgres-schema.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

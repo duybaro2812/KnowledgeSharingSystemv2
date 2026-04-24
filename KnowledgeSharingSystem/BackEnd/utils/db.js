@@ -1,4 +1,5 @@
 const dbClient = (process.env.DB_CLIENT || 'postgres').trim().toLowerCase();
+const databaseUrl = (process.env.DATABASE_URL || '').trim();
 
 let sql;
 let dbConfig;
@@ -23,20 +24,31 @@ if (dbClient !== 'postgres') {
     );
 }
 sql = createSqlTypeShim();
-dbConfig = {
-    host: process.env.DB_SERVER || 'localhost',
-    port: Number(process.env.DB_PORT || 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    ssl:
-        process.env.DB_ENCRYPT === 'true'
-            ? { rejectUnauthorized: process.env.DB_TRUST_SERVER_CERTIFICATE !== 'true' }
-            : false,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 30000,
-};
+dbConfig = databaseUrl
+    ? {
+          connectionString: databaseUrl,
+          ssl:
+              process.env.DB_ENCRYPT === 'true'
+                  ? { rejectUnauthorized: process.env.DB_TRUST_SERVER_CERTIFICATE !== 'true' }
+                  : false,
+          max: 10,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 30000,
+      }
+    : {
+          host: process.env.DB_SERVER || 'localhost',
+          port: Number(process.env.DB_PORT || 5432),
+          database: process.env.DB_NAME,
+          user: process.env.DB_USER,
+          password: process.env.DB_PASSWORD,
+          ssl:
+              process.env.DB_ENCRYPT === 'true'
+                  ? { rejectUnauthorized: process.env.DB_TRUST_SERVER_CERTIFICATE !== 'true' }
+                  : false,
+          max: 10,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 30000,
+      };
 
 const connectDB = async () => {
     if (pgPool) return pgPool;
