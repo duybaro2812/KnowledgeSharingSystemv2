@@ -1,366 +1,386 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-function formatSessionTime(value) {
-  if (!value) return "Just now";
+function normalizeStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  return status === "closed" ? "closed" : "open";
+}
+
+function formatRelativeTime(value) {
+  if (!value) return "N/A";
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "N/A";
+  const diff = Math.max(0, Date.now() - timestamp);
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  if (diff < hourMs) return `${Math.max(1, Math.floor(diff / minuteMs))}m ago`;
+  if (diff < dayMs) return `${Math.floor(diff / hourMs)}h ago`;
+  return `${Math.floor(diff / dayMs)}d ago`;
+}
+
+function formatClock(value) {
+  if (!value) return "";
   try {
-    return new Date(value).toLocaleString();
+    return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   } catch {
-    return "Just now";
+    return "";
   }
 }
 
 function getInitials(name) {
-  const clean = String(name || "").trim();
-  if (!clean) return "U";
-  const parts = clean.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
+  const tokens = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return "NS";
+  return tokens
+    .slice(0, 2)
+    .map((token) => token[0]?.toUpperCase() || "")
+    .join("");
 }
 
-function QaTabView(props) {
-  const { model, controller } = props;
-  const [draftMessage, setDraftMessage] = useState("");
-  const [ratingStars, setRatingStars] = useState(5);
-  const [ratingFeedback, setRatingFeedback] = useState("");
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isSending, setIsSending] = useState(false);
-  const [isClosingSession, setIsClosingSession] = useState(false);
-  const [isRating, setIsRating] = useState(false);
-  const [openingSessionId, setOpeningSessionId] = useState(0);
-  const [inlineNotice, setInlineNotice] = useState("");
+function renderStars(totalFilled) {
+  const filled = Math.max(0, Math.min(5, Number(totalFilled || 0)));
+  return [1, 2, 3, 4, 5].map((index) => (
+    <span
+      key={index}
+      className={`qa-star-icon ${index <= filled ? "filled" : ""}`}
+      aria-hidden="true"
+    >
+      *
+    </span>
+  ));
+}
 
-  const activeSession = model.activeSession;
-  const isSessionRated = Boolean(
-    activeSession &&
-      (activeSession.hasRatedByCurrentUser ||
-        model.ratedSessionMap?.[Number(activeSession.sessionId)]),
+function QaSessionCard({ session, isOwnerGroup, unreadCount, ratedValue, onOpen, disabled }) {
+  const status = normalizeStatus(session?.status);
+  const displayName = isOwnerGroup ? session?.askerName : session?.ownerName;
+  const sessionId = Number(session?.sessionId || 0);
+  const messageCount = Number(session?.totalMessages || 0);
+  const ratingValue = Number(session?.rating || session?.stars || ratedValue || 0);
+  const hasRated = Boolean(session?.hasRatedByCurrentUser || ratedValue);
+
+  return (
+    <button
+      type="button"
+      className={`qa-list-card ${status}`}
+      onClick={() => onOpen(session)}
+      disabled={disabled}
+      aria-label={`Open Q&A session ${sessionId}`}
+    >
+      <div className="qa-list-card-row">
+        <div className="qa-list-avatar">{getInitials(displayName)}</div>
+
+        <div className="qa-list-main">
+          <div className="qa-list-title-row">
+            <strong>{displayName || "NeuShare member"}</strong>
+            <span className={`qa-status-badge ${status}`}>{status}</span>
+          </div>
+
+          <p className="qa-list-document">{session?.documentTitle || "Untitled document"}</p>
+          <p className="qa-list-card-message">
+            {session?.latestMessage || "Open this session to read the full chat."}
+          </p>
+        </div>
+
+        <div className="qa-list-right">
+          {hasRated ? <div className="qa-list-rating">{renderStars(ratingValue || 5)}</div> : null}
+          <small>{formatRelativeTime(session?.latestMessageAt || session?.updatedAt || session?.createdAt)}</small>
+          <small>{messageCount} messages</small>
+          {isOwnerGroup && status === "open" ? <span className="qa-list-chip">Needs reply</span> : null}
+          {Number(unreadCount) > 0 ? <span className="qa-list-unread-pill">{unreadCount}</span> : null}
+        </div>
+      </div>
+    </button>
   );
-  const totalSessions = Array.isArray(model.sessions) ? model.sessions.length : 0;
-  const openSessions = Array.isArray(model.sessions)
-    ? model.sessions.filter((session) => session.status === "open").length
-    : 0;
-  const closedSessions = Math.max(0, totalSessions - openSessions);
-  const globalBusy = Boolean(model.isBusy);
+}
 
-  const canRateSession = useMemo(() => {
-    if (!activeSession) return false;
-    const isAsker = Number(activeSession.askerUserId) === Number(model.currentUserId);
-    return activeSession.status === "closed" && isAsker && !isSessionRated;
-  }, [activeSession, model.currentUserId, isSessionRated]);
+function QaTabView({ model, controller }) {
+  const [isListMode, setIsListMode] = useState(!model.activeSession?.sessionId);
+  const [draftMessage, setDraftMessage] = useState("");
+  const [selectedStars, setSelectedStars] = useState(0);
+  const [draftFeedback, setDraftFeedback] = useState("");
+  const messageListRef = useRef(null);
 
-  const submitMessage = async () => {
-    const normalized = draftMessage.trim();
-    if (!normalized || !activeSession?.sessionId || isSending) return;
-    setIsSending(true);
-    setInlineNotice("");
-    try {
-      await controller.onSendMessage(activeSession.sessionId, normalized);
-      setDraftMessage("");
-      setInlineNotice("Message sent.");
-    } finally {
-      setIsSending(false);
+  const sessions = useMemo(() => {
+    const list = Array.isArray(model.sessions) ? [...model.sessions] : [];
+    list.sort((a, b) => {
+      const timeA = new Date(a?.latestMessageAt || a?.updatedAt || a?.createdAt || 0).getTime();
+      const timeB = new Date(b?.latestMessageAt || b?.updatedAt || b?.createdAt || 0).getTime();
+      if (timeA !== timeB) return timeB - timeA;
+      return Number(b?.sessionId || 0) - Number(a?.sessionId || 0);
+    });
+    return list;
+  }, [model.sessions]);
+
+  const startedSessions = useMemo(
+    () => sessions.filter((session) => Number(session?.askerUserId || 0) === model.currentUserId),
+    [sessions, model.currentUserId],
+  );
+
+  const ownerSessions = useMemo(
+    () => sessions.filter((session) => Number(session?.ownerUserId || 0) === model.currentUserId),
+    [sessions, model.currentUserId],
+  );
+
+  const activeSession = model.activeSession || null;
+  const activeSessionId = Number(activeSession?.sessionId || 0);
+  const messages = Array.isArray(model.messages) ? model.messages : [];
+  const ratedValue = model.ratedSessionMap?.[activeSessionId];
+  const status = normalizeStatus(activeSession?.status);
+  const isClosed = status === "closed";
+  const isAsker = Number(activeSession?.askerUserId || 0) === model.currentUserId;
+  const explicitRating = Number(activeSession?.rating || activeSession?.stars || 0);
+  const persistedRating = Number(ratedValue || 0);
+  const hasRated = Boolean(activeSession?.hasRatedByCurrentUser || ratedValue);
+  const ratingToDisplay = explicitRating > 0 ? explicitRating : persistedRating > 0 ? persistedRating : 5;
+  const canSubmitRating = isClosed && isAsker && !hasRated;
+  const noticeText = hasRated
+    ? "Rating submitted successfully."
+    : isClosed
+      ? "This Q&A session has been closed."
+      : "";
+
+  useEffect(() => {
+    if (activeSessionId > 0) {
+      setIsListMode(false);
     }
-  };
+  }, [activeSessionId]);
 
-  const handleComposerKeyDown = async (event) => {
-    if (event.key !== "Enter") return;
-    if (event.shiftKey) return;
-    if (event.nativeEvent?.isComposing) return;
-    event.preventDefault();
-    await submitMessage();
-  };
+  useEffect(() => {
+    const preset = Number(activeSession?.rating || activeSession?.stars || ratedValue || 0);
+    setSelectedStars(preset > 0 ? Math.min(5, preset) : 0);
+    setDraftFeedback("");
+    setDraftMessage("");
+  }, [activeSessionId, activeSession?.rating, activeSession?.stars, ratedValue]);
 
-  const submitRating = async () => {
-    if (!activeSession?.sessionId || isRating) return;
-    setIsRating(true);
-    setInlineNotice("");
-    try {
-      await controller.onRateSession(activeSession.sessionId, ratingStars, ratingFeedback);
-      setRatingStars(5);
-      setRatingFeedback("");
-      setInlineNotice("Rating submitted successfully.");
-    } finally {
-      setIsRating(false);
-    }
-  };
-
-  const handleRefresh = async () => {
-    if (isRefreshing) return;
-    setIsRefreshing(true);
-    setInlineNotice("");
-    try {
-      await controller.onRefresh();
-      setInlineNotice("Session list updated.");
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
+  useEffect(() => {
+    const container = messageListRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, [messages.length, activeSessionId]);
 
   const handleOpenSession = async (session) => {
-    const sessionId = Number(session?.sessionId || 0);
-    if (!sessionId || openingSessionId === sessionId) return;
-    setOpeningSessionId(sessionId);
-    setInlineNotice("");
-    try {
-      await controller.onOpenSession(session);
-    } finally {
-      setOpeningSessionId(0);
-    }
+    setIsListMode(false);
+    await controller.onOpenSession(session);
+  };
+
+  const handleSendMessage = async () => {
+    const message = String(draftMessage || "").trim();
+    if (!message || !activeSessionId || model.isBusy || isClosed) return;
+    setDraftMessage("");
+    await controller.onSendMessage(activeSessionId, message);
   };
 
   const handleCloseSession = async () => {
-    const sessionId = Number(activeSession?.sessionId || 0);
-    if (!sessionId || isClosingSession) return;
-    setIsClosingSession(true);
-    setInlineNotice("");
-    try {
-      await controller.onCloseSession(sessionId);
-      setInlineNotice("This Q&A session is now closed.");
-    } finally {
-      setIsClosingSession(false);
-    }
+    if (!activeSessionId || model.isBusy) return;
+    const accepted = window.confirm("Do you want to close this Q&A session?");
+    if (!accepted) return;
+    await controller.onCloseSession(activeSessionId);
   };
 
-  return (
-    <section className="qa-page panel">
-      <div className="qa-page-head">
-        <div>
-          <h2>
-            Q&A sessions{" "}
-            {model.unreadCount > 0 && (
-              <span className="qa-unread-pill" aria-label={`${model.unreadCount} unread Q&A notifications`}>
-                {model.unreadCount > 10 ? "10+" : model.unreadCount}
-              </span>
-            )}
-          </h2>
-          <p className="hint">
-            Ask document owners questions, continue private discussions, and rate helpful support.
-          </p>
-        </div>
-        <div className="qa-head-actions">
-          <div className="qa-mini-stats" aria-hidden="true">
-            <span>{totalSessions} total</span>
-            <span>{openSessions} open</span>
-            <span>{closedSessions} closed</span>
+  const handleRateSession = async () => {
+    if (!activeSessionId || model.isBusy || selectedStars < 1) return;
+    await controller.onRateSession(activeSessionId, selectedStars, draftFeedback);
+  };
+
+  if (isListMode || !activeSession) {
+    return (
+      <section className="panel qa-page">
+        <div className="qa-page-head">
+          <div>
+            <h2>
+              Q&A Sessions
+              {model.unreadCount > 0 ? <span className="qa-unread-pill">{model.unreadCount}</span> : null}
+            </h2>
+            <p className="hint">Private 1-on-1 conversations with document owners.</p>
           </div>
-          <select
-            value={model.filter}
-            onChange={(e) => controller.onChangeFilter(e.target.value)}
-            aria-label="Filter Q&A sessions"
-          >
-            <option value="all">All sessions</option>
-            <option value="open">Open only</option>
-            <option value="closed">Closed only</option>
-          </select>
-          <button type="button" onClick={handleRefresh} disabled={isRefreshing || globalBusy}>
-            {isRefreshing || globalBusy ? "Refreshing..." : "Refresh"}
-          </button>
         </div>
+
+        <div className="qa-list-page">
+          <section className="qa-status-group">
+            <div className="qa-status-group-head">
+              <h3>Sessions I Started ({startedSessions.length})</h3>
+            </div>
+            <div className="qa-list-grid">
+              {startedSessions.length > 0 ? (
+                startedSessions.map((session) => (
+                  <QaSessionCard
+                    key={`asker-${session.sessionId}`}
+                    session={session}
+                    isOwnerGroup={false}
+                    unreadCount={model.unreadSessionMap?.[Number(session?.sessionId || 0)] || 0}
+                    ratedValue={model.ratedSessionMap?.[Number(session?.sessionId || 0)]}
+                    onOpen={handleOpenSession}
+                    disabled={model.isBusy}
+                  />
+                ))
+              ) : (
+                <div className="qa-message-empty">
+                  <h4>No sessions started yet</h4>
+                  <p>Open a document and start your first Q&A conversation.</p>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="qa-status-group">
+            <div className="qa-status-group-head">
+              <h3>Sessions on My Documents ({ownerSessions.length})</h3>
+            </div>
+            <div className="qa-list-grid">
+              {ownerSessions.length > 0 ? (
+                ownerSessions.map((session) => (
+                  <QaSessionCard
+                    key={`owner-${session.sessionId}`}
+                    session={session}
+                    isOwnerGroup
+                    unreadCount={model.unreadSessionMap?.[Number(session?.sessionId || 0)] || 0}
+                    ratedValue={model.ratedSessionMap?.[Number(session?.sessionId || 0)]}
+                    onOpen={handleOpenSession}
+                    disabled={model.isBusy}
+                  />
+                ))
+              ) : (
+                <div className="qa-message-empty">
+                  <h4>No sessions on your documents</h4>
+                  <p>When other users ask about your documents, sessions will appear here.</p>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel qa-page qa-chat-page">
+      <div className="qa-chat-topbar">
+        <button type="button" className="qa-back-btn" onClick={() => setIsListMode(true)}>
+          Back to sessions
+        </button>
       </div>
 
-      <div className="qa-layout">
-        <aside className="qa-session-list">
-          {isRefreshing && (
-            <div className="qa-list-loading">
-              <span className="qa-spinner" aria-hidden="true" />
-              <p>Updating session list...</p>
+      <article className="qa-chat-panel single">
+        <header className="qa-chat-head qa-chat-head-hero">
+          <div className="qa-chat-head-main">
+            <div className="qa-chat-user">
+              <div className="qa-list-avatar">
+                {getInitials(isAsker ? activeSession?.ownerName : activeSession?.askerName)}
+              </div>
+              <div>
+                <h3>{isAsker ? activeSession?.ownerName : activeSession?.askerName}</h3>
+                <p>{activeSession?.documentTitle || "Untitled document"}</p>
+              </div>
             </div>
-          )}
-          {model.sessions.length === 0 ? (
-            <p className="hint">No Q&A sessions yet. Open a document and ask the author a question.</p>
-          ) : (
-            model.sessions.map((session) => {
-              const isActive = Number(activeSession?.sessionId) === Number(session.sessionId);
-              const isOpening = Number(openingSessionId) === Number(session.sessionId);
-              const unreadCount = Number(model.unreadSessionMap?.[session.sessionId] || 0);
-              const isUnread = unreadCount > 0 && !isActive;
-              const counterpart =
-                Number(session.askerUserId) === Number(model.currentUserId)
-                  ? session.ownerName
-                  : session.askerName;
 
-              return (
-                <button
-                  key={session.sessionId}
-                  type="button"
-                  className={`qa-session-card ${isActive ? "active" : ""} ${isUnread ? "unread" : ""}`}
-                  onClick={() => handleOpenSession(session)}
-                  disabled={isOpening || globalBusy}
-                >
-                  <div className="qa-session-card-top">
-                    <strong>{session.documentTitle}</strong>
-                    <div className="qa-session-top-right">
-                      <span className={`qa-status-badge ${session.status}`}>{session.status}</span>
-                      {isUnread && <span className="qa-session-unread-dot" aria-hidden="true" />}
-                    </div>
-                  </div>
-                  <p className="qa-counterpart">With {counterpart || "NeuShare member"}</p>
-                  <p className="qa-snippet">{session.latestMessage || "No messages yet."}</p>
-                  <small>
-                    {session.totalMessages || 0} messages •{" "}
-                    {formatSessionTime(session.latestMessageAt || session.updatedAt || session.createdAt)}
-                  </small>
-                  {isOpening && <span className="qa-card-opening">Opening...</span>}
+            <div className="qa-chat-head-actions">
+              {hasRated ? <div className="qa-list-rating">{renderStars(ratingToDisplay)}</div> : null}
+              <span className={`qa-status-badge ${status}`}>{status}</span>
+              {isClosed ? (
+                <button type="button" className="qa-back-btn" onClick={() => setIsListMode(true)}>
+                  Close session
                 </button>
+              ) : (
+                <button type="button" className="warn-btn" onClick={handleCloseSession} disabled={model.isBusy}>
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
+
+          {noticeText ? <div className="qa-inline-notice qa-inline-notice-fixed">{noticeText}</div> : null}
+        </header>
+
+        <div ref={messageListRef} className="qa-message-list">
+          {messages.length > 0 ? (
+            messages.map((message) => {
+              const isMine = Number(message?.senderUserId || 0) === model.currentUserId;
+              const senderName = message?.senderName || (isMine ? model.user?.name : "NeuShare member");
+              return (
+                <div
+                  key={message?.messageId || `${message?.createdAt || ""}-${message?.message || ""}`}
+                  className={`qa-message-row ${isMine ? "mine" : ""}`}
+                >
+                  <div className={`qa-message-avatar ${isMine ? "mine" : ""}`}>{getInitials(senderName)}</div>
+                  <div className={`qa-message-bubble ${isMine ? "mine" : "theirs"}`}>
+                    <strong>{senderName}</strong>
+                    <p>{message?.message || ""}</p>
+                    <small>{formatClock(message?.createdAt)}</small>
+                  </div>
+                </div>
               );
             })
-          )}
-        </aside>
-
-        <div className="qa-chat-panel">
-          {!activeSession ? (
-            <div className="qa-empty-state">
-              <h3>Select a session</h3>
-              <p>Choose a Q&A session from the left to see the conversation.</p>
-            </div>
           ) : (
-            <>
-              <div className="qa-chat-head">
-                <div>
-                  <h3>{activeSession.documentTitle}</h3>
-                  <p>
-                    Asker: {activeSession.askerName} • Owner: {activeSession.ownerName}
-                  </p>
-                </div>
-                <div className="qa-chat-head-actions">
-                  <span className={`qa-status-badge ${activeSession.status}`}>{activeSession.status}</span>
-                  {activeSession.status === "open" && (
-                    <button
-                      type="button"
-                      className="danger-ghost"
-                      onClick={handleCloseSession}
-                      disabled={isClosingSession || globalBusy}
-                    >
-                      {isClosingSession ? "Closing..." : "Close session"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {inlineNotice && <div className="qa-inline-notice">{inlineNotice}</div>}
-
-              <div className="qa-message-list">
-                {model.messages.length === 0 ? (
-                  <div className="qa-message-empty">
-                    <h4>No messages yet</h4>
-                    <p>Start the conversation with a clear question to get faster support.</p>
-                  </div>
-                ) : (
-                  model.messages.map((message) => {
-                    const mine = Number(message.senderUserId) === Number(model.currentUserId);
-                    const senderName = message.senderName || "User";
-                    return (
-                      <div key={message.messageId} className={`qa-message-row ${mine ? "mine" : "theirs"}`}>
-                        {!mine && (
-                          <span className="qa-message-avatar" aria-hidden="true">
-                            {getInitials(senderName)}
-                          </span>
-                        )}
-                        <article className={`qa-message-bubble ${mine ? "mine" : "theirs"}`}>
-                          <strong>{senderName}</strong>
-                          <p>{message.message}</p>
-                          <small>{formatSessionTime(message.createdAt)}</small>
-                        </article>
-                        {mine && (
-                          <span className="qa-message-avatar mine" aria-hidden="true">
-                            {getInitials(senderName)}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {activeSession.status === "open" ? (
-                <div className="qa-composer">
-                  <div className="qa-composer-row">
-                    <textarea
-                      rows={2}
-                      value={draftMessage}
-                      onChange={(e) => setDraftMessage(e.target.value)}
-                      onKeyDown={handleComposerKeyDown}
-                      placeholder="Write your message..."
-                      disabled={isSending || globalBusy}
-                    />
-                    <button
-                      type="button"
-                      className="qa-send-btn"
-                      disabled={!draftMessage.trim() || isSending || globalBusy}
-                      onClick={submitMessage}
-                      aria-label="Send message"
-                      title="Send message"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path
-                          d="M21 3L10 14"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                        <path
-                          d="M21 3L14 21L10 14L3 10L21 3Z"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    className="primary-btn qa-send-mobile"
-                    disabled={!draftMessage.trim() || isSending || globalBusy}
-                    onClick={submitMessage}
-                  >
-                    {isSending ? "Sending..." : "Send message"}
-                  </button>
-                </div>
-              ) : (
-                <div className="qa-closed-note">
-                  <p>This Q&A session is closed.</p>
-                  {isSessionRated && <p>Your rating was submitted for this session.</p>}
-                </div>
-              )}
-
-              {canRateSession && (
-                <div className="qa-rating-card">
-                  <h4>Rate this session</h4>
-                  <div className="qa-stars">
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <button
-                        key={star}
-                        type="button"
-                        className={star <= ratingStars ? "active" : ""}
-                        onClick={() => setRatingStars(star)}
-                      >
-                        ★
-                      </button>
-                    ))}
-                  </div>
-                  <textarea
-                    rows={3}
-                    value={ratingFeedback}
-                    onChange={(e) => setRatingFeedback(e.target.value)}
-                    placeholder="Share brief feedback for this Q&A session..."
-                    disabled={isRating || globalBusy}
-                  />
-                  <button
-                    type="button"
-                    className="primary-btn"
-                    onClick={submitRating}
-                    disabled={isRating || globalBusy}
-                  >
-                    {isRating ? "Submitting..." : "Submit rating"}
-                  </button>
-                </div>
-              )}
-            </>
+            <div className="qa-message-empty">
+              <h4>No messages yet</h4>
+              <p>Start the conversation by sending the first message.</p>
+            </div>
           )}
         </div>
-      </div>
+
+        {isClosed ? (
+          canSubmitRating ? (
+            <section className="qa-rating-card">
+              <h4>Rate this Q&A session</h4>
+              <div className="qa-stars" role="radiogroup" aria-label="Choose rating from one to five stars">
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={selectedStars >= value ? "active" : ""}
+                    onClick={() => setSelectedStars(value)}
+                    aria-label={`${value} stars`}
+                  >
+                    *
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={draftFeedback}
+                onChange={(event) => setDraftFeedback(event.target.value)}
+                placeholder="Optional feedback for this session"
+                maxLength={500}
+                disabled={model.isBusy}
+              />
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={handleRateSession}
+                disabled={model.isBusy || selectedStars < 1}
+              >
+                Submit rating
+              </button>
+            </section>
+          ) : (
+            <footer className="qa-closed-note">
+              <p>This session has been closed.</p>
+            </footer>
+          )
+        ) : (
+          <form
+            className="qa-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSendMessage();
+            }}
+          >
+            <div className="qa-composer-row">
+              <textarea
+                value={draftMessage}
+                onChange={(event) => setDraftMessage(event.target.value)}
+                placeholder="Type your message..."
+                maxLength={2000}
+                disabled={model.isBusy}
+              />
+              <button type="submit" className="qa-send-btn" disabled={model.isBusy || !draftMessage.trim()}>
+                Send
+              </button>
+            </div>
+          </form>
+        )}
+      </article>
     </section>
   );
 }

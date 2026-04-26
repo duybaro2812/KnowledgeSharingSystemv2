@@ -1,3 +1,12 @@
+function formatTime(value) {
+  if (!value) return "N/A";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return "N/A";
+  }
+}
+
 function DocumentsTabView(props) {
   const { model, controller } = props;
 
@@ -11,9 +20,14 @@ function DocumentsTabView(props) {
   }
 
   return (
-    <section className="panel">
-      <div className="moderation-header-row">
-        <h2>Documents workspace</h2>
+    <section className="panel documents-panel">
+      <div className="moderation-header-row documents-head-row">
+        <div>
+          <h2>My Documents Workspace</h2>
+          <p className="hint">
+            Review and maintain all uploaded documents with fast moderation actions.
+          </p>
+        </div>
         <button type="button" disabled={model.isBusy} onClick={() => controller.onRefresh()}>
           Refresh documents
         </button>
@@ -50,21 +64,29 @@ function DocumentsTabView(props) {
       {model.documents.length === 0 ? (
         <p className="hint">No documents found.</p>
       ) : (
-        <div className="moderation-list">
+        <div className="moderation-list documents-list">
           {model.documents.map((doc) => {
             const status = String(doc?.status || "").toLowerCase();
             const isPending = status === "pending";
             return (
               <article key={doc.documentId} className="moderation-item">
-                <h3>
-                  #{doc.documentId} - {doc.title || "Untitled document"}
-                </h3>
-                <p>
-                  Owner: <b>{doc.ownerName || "Unknown"}</b> · Status: <b>{status || "unknown"}</b>
-                </p>
-                <p>
-                  Course: <b>{doc.categoryNames || "N/A"}</b>
-                </p>
+                <div className="documents-item-head">
+                  <h3>
+                    #{doc.documentId} - {doc.title || "Untitled document"}
+                  </h3>
+                  <span className={`qa-status-badge ${status}`}>{status || "unknown"}</span>
+                </div>
+                <div className="documents-item-meta">
+                  <p>
+                    Owner: <b>{doc.ownerName || "Unknown"}</b>
+                  </p>
+                  <p>
+                    Course: <b>{doc.categoryNames || "N/A"}</b>
+                  </p>
+                  <p>
+                    Updated: <b>{formatTime(doc.updatedAt || doc.createdAt)}</b>
+                  </p>
+                </div>
                 <div className="action-row">
                   <button type="button" disabled={model.isBusy} onClick={() => controller.onOpenPreview(doc)}>
                     Open
@@ -104,4 +126,3 @@ function DocumentsTabView(props) {
 }
 
 export default DocumentsTabView;
-

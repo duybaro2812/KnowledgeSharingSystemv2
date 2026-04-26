@@ -399,10 +399,11 @@ function AppController() {
         ownerName: doc.ownerName || doc.authorName || doc.uploadedByName || "NeuShare member",
         currentUserId: 0,
         currentUserName: "Guest",
+        currentUserRole: "guest",
         isOwner: false,
         requiredPoints,
         isLockedForPoints: true,
-        previewPageLimit: 5,
+        previewPageLimit: 3,
         canFullView: false,
         canDownload: false,
         points: 0,
@@ -567,19 +568,20 @@ function AppController() {
         const previewData = previewPayload?.data || {};
         createOpenPreview(setPreviewDoc)({
           ...normalizedDoc,
-          accessState: previewData.accessState || "guest_locked",
+          accessState: "guest_locked",
           requiredPoints:
             Number(previewData.lockedOverlay?.requiredPoints || previewData.requiredPoints) ||
             normalizedDoc.requiredPoints,
           isLockedForPoints: true,
           canFullView: false,
           canDownload: false,
-          canPreview: true,
+          canPreview: Boolean(previewData.canPreview),
           points: 0,
-          tier: previewData.tier || "guest_locked",
+          tier: "guest_locked",
           accessReason: previewData.reason || normalizedDoc.accessReason || "",
           lockedOverlay: previewData.lockedOverlay || normalizedDoc.lockedOverlay || null,
-          previewPageLimit: Number(previewData.previewPageLimit || 5),
+          previewPageLimit: Number(previewData.previewPageLimit || 0),
+          totalPages: Number(previewData.totalPages || normalizedDoc.totalPages || 0) || null,
           viewer: previewData.viewer || null,
           viewerStatus: previewData.viewer?.status || "",
           viewerKind: previewData.viewer?.viewerKind || null,
@@ -597,7 +599,7 @@ function AppController() {
           previewUrl: "",
           previewReason: message,
           isLockedForPoints: true,
-          previewPageLimit: 5,
+          previewPageLimit: 0,
           isLoading: false,
         });
       }
@@ -641,6 +643,7 @@ function AppController() {
         previewPageLimit: Number.isFinite(Number(accessData.previewPageLimit))
           ? Number(accessData.previewPageLimit)
           : null,
+        totalPages: Number(accessData.totalPages || normalizedDoc.totalPages || 0) || null,
         viewer: accessData.viewer || null,
         securePreviewUrl: accessData.viewer?.previewViewerUrl
           ? `${API_ORIGIN}${accessData.viewer.previewViewerUrl}`
@@ -821,13 +824,18 @@ function AppController() {
     });
     const list = Array.isArray(payload?.data) ? payload.data : [];
     setQaSessions(list);
-    const ratedFromList = {};
-    list.forEach((session) => {
-      if (session?.hasRatedByCurrentUser) {
-        ratedFromList[Number(session.sessionId)] = true;
-      }
+    setQaRatedSessionMap((prev) => {
+      const next = { ...(prev || {}) };
+      list.forEach((session) => {
+        if (!session?.hasRatedByCurrentUser) return;
+        const sessionId = Number(session?.sessionId || 0);
+        if (!Number.isInteger(sessionId) || sessionId <= 0) return;
+        const existing = next[sessionId];
+        next[sessionId] =
+          Number.isFinite(Number(existing)) && Number(existing) > 0 ? Number(existing) : true;
+      });
+      return next;
     });
-    setQaRatedSessionMap((prev) => ({ ...prev, ...ratedFromList }));
     return list;
   };
 
@@ -843,7 +851,14 @@ function AppController() {
       setActiveQaSession(data.session || null);
       setQaMessages(Array.isArray(data.messages) ? data.messages : []);
       if (data?.session?.hasRatedByCurrentUser) {
-        setQaRatedSessionMap((prev) => ({ ...prev, [sessionId]: true }));
+        setQaRatedSessionMap((prev) => {
+          const existing = prev?.[sessionId];
+          return {
+            ...prev,
+            [sessionId]:
+              Number.isFinite(Number(existing)) && Number(existing) > 0 ? Number(existing) : true,
+          };
+        });
       }
       setActiveTab("qa", {
         sessionId,
@@ -947,7 +962,10 @@ function AppController() {
         body: { stars, feedback: feedback.trim() || null },
       });
 
-      setQaRatedSessionMap((prev) => ({ ...prev, [numericId]: true }));
+      setQaRatedSessionMap((prev) => ({
+        ...prev,
+        [numericId]: Number.isFinite(Number(stars)) && Number(stars) > 0 ? Number(stars) : true,
+      }));
       await loadQaSessions();
       const latest = await apiRequest(`/qa-sessions/${numericId}/messages`, { token });
       setActiveQaSession(latest?.data?.session || activeQaSession);
@@ -966,7 +984,13 @@ function AppController() {
       }
 
       if (normalizedMessage.includes("already rated")) {
-        setQaRatedSessionMap((prev) => ({ ...prev, [numericId]: true }));
+        setQaRatedSessionMap((prev) => ({
+          ...prev,
+          [numericId]:
+            Number.isFinite(Number(prev?.[numericId])) && Number(prev?.[numericId]) > 0
+              ? Number(prev[numericId])
+              : true,
+        }));
         await loadQaSessions();
         const latest = await apiRequest(`/qa-sessions/${numericId}/messages`, { token });
         setActiveQaSession(latest?.data?.session || activeQaSession);
@@ -1505,7 +1529,7 @@ function AppController() {
 
   useEffect(() => {
     const targetDocId = Number(previewDoc?.documentId);
-    if (!Number.isInteger(targetDocId) || targetDocId <= 0) {
+    if (!token || !Number.isInteger(targetDocId) || targetDocId <= 0) {
       setPreviewComments([]);
       return;
     }
@@ -1513,7 +1537,7 @@ function AppController() {
     call(async () => {
       await loadCommentsByDocument(targetDocId);
     });
-  }, [previewDoc?.documentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [previewDoc?.documentId, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!["verify-otp", "forgot-verify"].includes(authMode) || resendCooldown <= 0) return;

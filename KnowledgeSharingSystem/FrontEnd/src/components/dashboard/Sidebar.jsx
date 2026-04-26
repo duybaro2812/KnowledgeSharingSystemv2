@@ -144,6 +144,26 @@ function PlusIcon() {
   );
 }
 
+function PointsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 4.4 14 8.3l4.3.6-3.1 3 .8 4.2-4-2.1-4 2.1.8-4.2-3.1-3 4.3-.6z"
+        fill="currentColor"
+        opacity="0.14"
+      />
+      <path
+        d="M12 4.6 14 8.6l4.4.7-3.2 3.1.8 4.4-4-2.2-4 2.2.8-4.4-3.2-3.1 4.4-.7z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function Sidebar(props) {
   const {
     user,
@@ -154,54 +174,70 @@ function Sidebar(props) {
     isGuestMode,
     onGuestBlockedAction,
     qaUnreadCount = 0,
-    notifications = [],
   } = props;
   const role = user?.role || "user";
   const isUserRole = role === "user";
   const isAdminRole = role === "admin";
   const initials = (user?.name || "U").slice(0, 1).toUpperCase();
   const profileRoleLabel = isGuestMode ? "Guest" : user?.role;
-  const notificationUnreadCount = (Array.isArray(notifications) ? notifications : []).filter(
-    (item) => !item?.isRead,
-  ).length;
+  const pointValue = Number(user?.points || 0);
 
   const menuItems = isUserRole
     ? [
         { key: "home", label: "Home", icon: <HomeIcon /> },
+        { key: "recent", label: "My documents", icon: <RecentIcon /> },
         { key: "library", label: "My library", icon: <LibraryIcon /> },
         { key: "qa", label: "Q&A sessions", icon: <QaIcon />, badgeCount: qaUnreadCount },
-        { key: "recent", label: "Recent", icon: <RecentIcon /> },
+        { key: "points", label: "Points", icon: <PointsIcon /> },
       ]
     : [
         { key: "home", label: "Home", icon: <HomeIcon /> },
+        { key: "points", label: "Points", icon: <PointsIcon /> },
         { key: "moderation", label: isAdminRole ? "Admin queue" : "Moderation queue", icon: <RecentIcon /> },
         { key: "documents", label: "Documents", icon: <LibraryIcon /> },
         ...(isAdminRole ? [{ key: "users", label: "Users", icon: <QaIcon /> }] : []),
         { key: "categories", label: "Courses", icon: <LibraryIcon /> },
-        { key: "notifications", label: "Notifications", icon: <LibraryIcon />, badgeCount: notificationUnreadCount },
       ];
 
   const normalizedActiveTab = activeTab === "recent" ? "recent" : activeTab;
+  const handleBrandClick = () => {
+    if (normalizedActiveTab === "home") {
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        window.location.reload();
+      }
+      return;
+    }
+    setActiveTab("home");
+  };
 
   return (
     <aside className={`sidebar role-sidebar role-${role} ${isSidebarCollapsed ? "collapsed" : ""}`}>
       <div className="sidebar-main">
-        {!isSidebarCollapsed && <div className="brand sidebar-brand">NeuShare</div>}
+        {!isSidebarCollapsed && (
+          <button
+            type="button"
+            className="brand sidebar-brand sidebar-brand-btn"
+            onClick={handleBrandClick}
+            title="Go to Home"
+          >
+            <span className="sidebar-brand-mark" aria-hidden="true">
+              N
+            </span>
+            <span>NeuShare</span>
+          </button>
+        )}
 
-        <button
-          type="button"
-          className={`profile profile-trigger ${isSidebarCollapsed ? "collapsed" : ""}`}
-          onClick={() => setActiveTab("profile")}
-          title={user?.name || "Profile"}
-        >
+        <div className={`profile profile-panel ${isSidebarCollapsed ? "collapsed" : ""}`}>
           <div className="avatar">{initials}</div>
           {!isSidebarCollapsed && (
             <div className="profile-copy">
               <div className="profile-name">{user?.name}</div>
               <div className="profile-role">{profileRoleLabel}</div>
+              <div className="profile-points-pill">{pointValue} pts</div>
             </div>
           )}
-        </button>
+        </div>
 
         {isSidebarCollapsed ? (
           <div className="sidebar-stats-placeholder" aria-hidden="true" />
@@ -279,6 +315,11 @@ function Sidebar(props) {
         </nav>
       </div>
 
+      {!isSidebarCollapsed && (
+        <p className="sidebar-bottom-note">
+          Notifications and profile are available in the top-right menu.
+        </p>
+      )}
     </aside>
   );
 }

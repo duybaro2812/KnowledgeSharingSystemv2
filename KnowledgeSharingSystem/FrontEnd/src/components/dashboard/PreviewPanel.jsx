@@ -1,13 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 
 const PDFJS_MODULE_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.min.mjs";
 const PDFJS_WORKER_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.worker.min.mjs";
 
-function LimitedPdfPreview({ fileUrl, pageLimit = 5 }) {
+function LimitedPdfPreview({ fileUrl, pageLimit = 5, totalPages = null, lockOverlayContent = null }) {
   const hostRef = useRef(null);
+  const lockedHostRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [renderedPages, setRenderedPages] = useState(0);
+  const parsedPageLimit = Number(pageLimit);
+  const normalizedPageLimit = Number.isFinite(parsedPageLimit) && parsedPageLimit > 0 ? parsedPageLimit : 3;
+  const parsedTotalPages = Number(totalPages);
+  const safeTotalPages =
+    Number.isFinite(parsedTotalPages) && parsedTotalPages > normalizedPageLimit
+      ? parsedTotalPages
+      : normalizedPageLimit + 2;
+  const lockedPagePreviewCount = Math.max(
+    1,
+    Math.min(3, safeTotalPages - normalizedPageLimit),
+  );
+  const hasLockOverlay = Boolean(lockOverlayContent);
 
   useEffect(() => {
     let isCancelled = false;
@@ -21,7 +34,9 @@ function LimitedPdfPreview({ fileUrl, pageLimit = 5 }) {
       }
 
       const hostElement = hostRef.current;
+      const lockedHostElement = lockedHostRef.current;
       hostElement.innerHTML = "";
+      if (lockedHostElement) lockedHostElement.innerHTML = "";
       setError("");
       setIsLoading(true);
       setRenderedPages(0);
@@ -31,9 +46,16 @@ function LimitedPdfPreview({ fileUrl, pageLimit = 5 }) {
         pdfJs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
         loadingTask = pdfJs.getDocument({ url: fileUrl });
         const pdfDocument = await loadingTask.promise;
-        const totalPages = Math.max(1, Math.min(Number(pageLimit || 5), Number(pdfDocument.numPages || 0)));
+        const totalPagesToRender = Math.max(1, Math.min(normalizedPageLimit, Number(pdfDocument.numPages || 0)));
+        const totalLockedPagesToRender =
+          hasLockOverlay && lockedHostElement
+            ? Math.min(
+                Number(pdfDocument.numPages || 0),
+                normalizedPageLimit + lockedPagePreviewCount,
+              )
+            : totalPagesToRender;
 
-        for (let pageIndex = 1; pageIndex <= totalPages; pageIndex += 1) {
+        const renderPage = async (pageIndex, targetElement, isLockedPage = false) => {
           if (isCancelled) return;
 
           const page = await pdfDocument.getPage(pageIndex);
@@ -50,14 +72,24 @@ function LimitedPdfPreview({ fileUrl, pageLimit = 5 }) {
           }).promise;
 
           const pageShell = document.createElement("div");
-          pageShell.className = "limited-preview-page";
+          pageShell.className = isLockedPage
+            ? "limited-preview-page limited-preview-page-locked"
+            : "limited-preview-page";
           const pageBadge = document.createElement("span");
           pageBadge.className = "limited-preview-page-number";
           pageBadge.textContent = `Page ${pageIndex}`;
           pageShell.appendChild(pageBadge);
           pageShell.appendChild(canvas);
-          hostElement.appendChild(pageShell);
+          targetElement.appendChild(pageShell);
+        };
+
+        for (let pageIndex = 1; pageIndex <= totalPagesToRender; pageIndex += 1) {
+          await renderPage(pageIndex, hostElement);
           setRenderedPages(pageIndex);
+        }
+
+        for (let pageIndex = normalizedPageLimit + 1; pageIndex <= totalLockedPagesToRender; pageIndex += 1) {
+          await renderPage(pageIndex, lockedHostElement, true);
         }
 
         if (!isCancelled) {
@@ -78,7 +110,7 @@ function LimitedPdfPreview({ fileUrl, pageLimit = 5 }) {
         loadingTask.destroy();
       }
     };
-  }, [fileUrl, pageLimit]);
+  }, [fileUrl, normalizedPageLimit, lockedPagePreviewCount, hasLockOverlay]);
 
   if (error) {
     return (
@@ -93,16 +125,26 @@ function LimitedPdfPreview({ fileUrl, pageLimit = 5 }) {
     <div className="limited-viewer-wrap">
       <div className="limited-viewer-topbar">
         <span className="limited-viewer-badge">Preview mode</span>
-        <p>Showing first {Number(pageLimit || 5)} pages</p>
+        <p>Showing first {normalizedPageLimit} pages</p>
       </div>
       <div className="limited-preview-shell">
         {isLoading && (
           <div className="limited-preview-loading">
             <span className="limited-preview-spinner" />
-            <p>Loading first {Number(pageLimit || 5)} pages...</p>
+            <p>Loading first {normalizedPageLimit} pages...</p>
           </div>
         )}
         <div ref={hostRef} className="limited-preview-host" />
+        {lockOverlayContent && (
+          <div className={isLoading || renderedPages <= 0 ? "limited-preview-lock-zone is-pending" : "limited-preview-lock-zone"}>
+            <div ref={lockedHostRef} className="limited-preview-locked-pages" aria-hidden="true" />
+            {!isLoading && renderedPages > 0 && (
+              <div className="preview-lock-overlay preview-lock-overlay-embedded">
+                {lockOverlayContent}
+              </div>
+            )}
+          </div>
+        )}
         {!isLoading && renderedPages <= 0 && (
           <div className="preview-unavailable-state limited-preview-fallback">
             <h3>No preview pages</h3>
@@ -110,9 +152,11 @@ function LimitedPdfPreview({ fileUrl, pageLimit = 5 }) {
           </div>
         )}
       </div>
-      <div className="limited-viewer-footer">
-        <span>Locked after page {Number(pageLimit || 5)}</span>
-      </div>
+      {!lockOverlayContent && (
+        <div className="limited-viewer-footer">
+          <span>Locked after page {normalizedPageLimit}</span>
+        </div>
+      )}
       {isLoading && (
         <div className="limited-preview-loading limited-preview-loading-floating">
           <span className="limited-preview-spinner" />
@@ -201,6 +245,11 @@ function PreviewPanel(props) {
     Number(currentUserId) > 0 &&
     !isOwner &&
     Boolean(onStartQa);
+  const isGuestLike =
+    Boolean(isGuestMode) ||
+    String(previewDoc.currentUserRole || "").toLowerCase() === "guest" ||
+    !Number.isInteger(Number(currentUserId)) ||
+    Number(currentUserId) <= 0;
   const isModeratorOrAdmin = ["moderator", "admin"].includes(
     String(previewDoc.currentUserRole || "").toLowerCase(),
   );
@@ -217,6 +266,10 @@ function PreviewPanel(props) {
   const lockedOverlayHelper =
     previewDoc.lockedOverlay?.helperText ||
     "You can still discuss, comment, reply, and ask the owner questions.";
+  const isGuestLockedState =
+    accessState === "guest_locked" ||
+    tier === "guest_locked";
+  const shouldShowAuthCta = isGuestLike || isGuestLockedState;
   const canRenderLimitedPdf =
     isLocked &&
     previewPageLimit > 0 &&
@@ -292,6 +345,10 @@ function PreviewPanel(props) {
   };
 
   const handleOpenAskAuthor = () => {
+    if (shouldShowAuthCta) {
+      if (onNavigateToLogin) onNavigateToLogin();
+      return;
+    }
     focusPreviewCenter();
     window.requestAnimationFrame(() => {
       openQaModal();
@@ -299,6 +356,10 @@ function PreviewPanel(props) {
   };
 
   const handleOpenEarnPoints = () => {
+    if (shouldShowAuthCta) {
+      if (onNavigateToRegister) onNavigateToRegister();
+      return;
+    }
     focusPreviewCenter();
     window.requestAnimationFrame(() => {
       openEarnPointsModal();
@@ -359,16 +420,51 @@ function PreviewPanel(props) {
   const handleReviewCommentPoint = async (comment) => {
     if (!onReviewCommentPoint || !isModeratorOrAdmin) return;
 
-    const rawPoints = window.prompt("Nhập điểm cho comment (10-15):", "10");
+    const rawPoints = window.prompt("Nhap diem cho comment (10-15):", "10");
     if (rawPoints === null) return;
     const parsed = Number(rawPoints);
     if (!Number.isInteger(parsed) || parsed < 10 || parsed > 15) {
-      window.alert("Điểm hợp lệ là số nguyên từ 10 đến 15.");
+      window.alert("Diem hop le la so nguyen tu 10 den 15.");
       return;
     }
-    const note = window.prompt("Ghi chú đánh giá (tuỳ chọn):", "") || "";
+    const note = window.prompt("Ghi chu danh gia (tuy chon):", "") || "";
     await onReviewCommentPoint(comment, parsed, note);
   };
+
+  const lockOverlayContent = (
+    <>
+      <h3>Locked: {lockedOverlayTitle}</h3>
+      <p>{lockedOverlayMessage}</p>
+      <small>
+        {canRenderLimitedPdf
+          ? `You can preview the first ${previewPageLimit} pages. ${lockedOverlayHelper}`
+          : lockedOverlayHelper}
+      </small>
+      <div className="lock-overlay-actions">
+        {shouldShowAuthCta ? (
+          <>
+            <button type="button" className="primary-btn guest-ask-btn" onClick={handleOpenAskAuthor}>
+              Đăng nhập
+            </button>
+            <button type="button" className="preview-earn-btn guest-earn-btn" onClick={handleOpenEarnPoints}>
+              Đăng ký
+            </button>
+          </>
+        ) : (
+          <>
+            {canAskAuthor && (
+              <button type="button" onClick={handleOpenAskAuthor}>
+                Ask author
+              </button>
+            )}
+            <button type="button" className="preview-earn-btn" onClick={handleOpenEarnPoints}>
+              Earn points
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
 
   const renderCommentItem = (comment, depth = 0) => {
     const replyChildren = childrenByParent[comment.commentId] || [];
@@ -379,9 +475,9 @@ function PreviewPanel(props) {
     const evaluatedPoints = Number(comment?.pointEventPoints || 0);
     const pointEvaluationLabel =
       pointEventStatus === "approved"
-        ? `Đã đánh giá${evaluatedPoints > 0 ? `: ${evaluatedPoints} điểm` : ""}`
+        ? `Da danh gia${evaluatedPoints > 0 ? `: ${evaluatedPoints} diem` : ""}`
         : pointEventStatus === "rejected"
-          ? "Đã đánh giá: từ chối"
+          ? "Da danh gia: tu choi"
           : "";
 
     return (
@@ -413,7 +509,7 @@ function PreviewPanel(props) {
           {isModeratorOrAdmin && (
             <>
               <button type="button" onClick={() => handleReviewCommentPoint(comment)}>
-                {hasPointEvaluation ? "Sửa đánh giá điểm" : "Evaluate 10-15"}
+                {hasPointEvaluation ? "Sua danh gia diem" : "Evaluate 10-15"}
               </button>
               <button
                 type="button"
@@ -547,7 +643,7 @@ function PreviewPanel(props) {
               disabled={isBusy}
               onClick={() => onToggleLike && onToggleLike(docId)}
             >
-              👍 {reaction.likeCount || 0}
+              + {reaction.likeCount || 0}
             </button>
             <button
               type="button"
@@ -555,7 +651,7 @@ function PreviewPanel(props) {
               disabled={isBusy}
               onClick={() => onToggleDislike && onToggleDislike(docId)}
             >
-              👎 {reaction.dislikeCount || 0}
+              - {reaction.dislikeCount || 0}
             </button>
             <button type="button" disabled={isBusy} onClick={() => onToggleSave && onToggleSave(docId)}>
               {reaction.saved ? "Saved" : "Save"}
@@ -563,16 +659,6 @@ function PreviewPanel(props) {
           </div>
         )}
         <div className="preview-actions-right">
-          {canAskAuthor && (
-            <button type="button" className="preview-qa-btn" disabled={isBusy} onClick={handleOpenAskAuthor}>
-              Ask author
-            </button>
-          )}
-          {isLocked && (
-            <button type="button" className="preview-earn-btn" disabled={isBusy} onClick={handleOpenEarnPoints}>
-              Earn points
-            </button>
-          )}
           <button type="button" className="danger-ghost preview-report-btn" disabled={isBusy} onClick={openReportModal}>
             Report Document
           </button>
@@ -587,7 +673,12 @@ function PreviewPanel(props) {
               <p>Your document is being opened inside NeuShare.</p>
             </div>
           ) : canRenderLimitedPdf ? (
-            <LimitedPdfPreview fileUrl={previewDoc.previewUrl} pageLimit={previewPageLimit} />
+            <LimitedPdfPreview
+              fileUrl={previewDoc.previewUrl}
+              pageLimit={previewPageLimit}
+              totalPages={previewDoc.totalPages}
+              lockOverlayContent={lockOverlayContent}
+            />
           ) : previewDoc.previewUrl ? (
             <iframe
               title={`preview-${previewDoc.title}`}
@@ -608,38 +699,9 @@ function PreviewPanel(props) {
           )}
         </div>
 
-        {isLocked && (
-          <div className={canRenderLimitedPdf ? "preview-lock-overlay preview-lock-overlay-partial" : "preview-lock-overlay"}>
-            <h3>🔒 {lockedOverlayTitle}</h3>
-            <p>{lockedOverlayMessage}</p>
-            <small>
-              {canRenderLimitedPdf
-                ? `You can preview the first ${previewPageLimit} pages. ${lockedOverlayHelper}`
-                : lockedOverlayHelper}
-            </small>
-            <div className="lock-overlay-actions">
-              {isGuestMode ? (
-                <>
-                  <button type="button" className="primary-btn guest-ask-btn" onClick={handleOpenAskAuthor}>
-                    Đăng nhập
-                  </button>
-                  <button type="button" className="preview-earn-btn guest-earn-btn" onClick={handleOpenEarnPoints}>
-                    Đăng ký
-                  </button>
-                </>
-              ) : (
-                <>
-                  {canAskAuthor && (
-                    <button type="button" onClick={handleOpenAskAuthor}>
-                      Ask author
-                    </button>
-                  )}
-                  <button type="button" className="preview-earn-btn" onClick={handleOpenEarnPoints}>
-                    Earn points
-                  </button>
-                </>
-              )}
-            </div>
+        {isLocked && !canRenderLimitedPdf && (
+          <div className="preview-lock-overlay">
+            {lockOverlayContent}
           </div>
         )}
       </div>
@@ -684,7 +746,7 @@ function PreviewPanel(props) {
             <div className="report-modal-head">
               <h3>Report Document</h3>
               <button type="button" className="report-close-btn" onClick={closeReportModal}>
-                ×
+                x
               </button>
             </div>
             <p className="report-modal-sub">Please enter the reason for reporting this document.</p>
@@ -718,13 +780,13 @@ function PreviewPanel(props) {
             <div className="report-modal-head">
               <h3>Ask the author</h3>
               <button type="button" className="report-close-btn" onClick={closeQaModal}>
-                ×
+                x
               </button>
             </div>
-            {isGuestMode ? (
+            {shouldShowAuthCta ? (
               <>
                 <p className="report-modal-sub">
-                  Bạn chưa đăng nhập. Vui lòng đăng nhập hoặc đăng ký để hỏi tác giả.
+                  Ban chua dang nhap. Vui long dang nhap hoac dang ky de hoi tac gia.
                 </p>
                 <div className="report-modal-actions">
                   <button type="button" onClick={closeQaModal}>
@@ -737,9 +799,7 @@ function PreviewPanel(props) {
                   >
                     Đăng nhập
                   </button>
-                  <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>
-                    Đăng ký
-                  </button>
+                  <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>Đăng ký</button>
                 </div>
               </>
             ) : (
@@ -777,22 +837,22 @@ function PreviewPanel(props) {
             <div className="report-modal-head">
               <h3>How to earn points</h3>
               <button type="button" className="report-close-btn" onClick={closeEarnPointsModal}>
-                ×
+                x
               </button>
             </div>
             <p className="report-modal-sub">Contribute to the community to unlock full view and downloads.</p>
             <ul className="earn-points-list">
-              <li>Upload tài liệu mới và chờ moderator/admin duyệt.</li>
-              <li>Tài liệu được duyệt sẽ nhận thêm điểm thưởng.</li>
-              <li>Bình luận và trả lời thảo luận có chất lượng.</li>
-              <li>Nhận upvote/đánh giá tích cực từ người dùng khác.</li>
-              <li>Tham gia Q&A và hỗ trợ người học khác.</li>
+              <li>Upload tai lieu moi va cho moderator/admin duyet.</li>
+              <li>Tai lieu duoc duyet se nhan them diem thuong.</li>
+              <li>Binh luan va tra loi thao luan co chat luong.</li>
+              <li>Nhan upvote/danh gia tich cuc tu nguoi dung khac.</li>
+              <li>Tham gia Q&A va ho tro nguoi hoc khac.</li>
             </ul>
             <div className="report-modal-actions">
               <button type="button" onClick={closeEarnPointsModal}>
                 Close
               </button>
-              {isGuestMode ? (
+              {shouldShowAuthCta ? (
                 <>
                   <button
                     type="button"
@@ -801,9 +861,7 @@ function PreviewPanel(props) {
                   >
                     Đăng nhập
                   </button>
-                  <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>
-                    Đăng ký
-                  </button>
+                  <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>Đăng ký</button>
                 </>
               ) : (
                 <button type="button" className="primary-btn" onClick={onClose}>
@@ -819,3 +877,5 @@ function PreviewPanel(props) {
 }
 
 export default PreviewPanel;
+
+

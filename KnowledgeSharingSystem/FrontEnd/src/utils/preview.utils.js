@@ -80,6 +80,7 @@ export const createOpenPreview = (setPreviewDoc) => (doc) => {
     previewPageLimit: Number.isFinite(Number(doc.previewPageLimit))
       ? Number(doc.previewPageLimit)
       : null,
+    totalPages: Number.isFinite(Number(doc.totalPages)) ? Number(doc.totalPages) : null,
     lockedOverlay: doc.lockedOverlay || null,
     canDownload: Boolean(doc.canDownload),
     downloadCost: Number(doc.downloadCost || 0),

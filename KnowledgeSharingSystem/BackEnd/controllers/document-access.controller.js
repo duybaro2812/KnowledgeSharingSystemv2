@@ -1,6 +1,11 @@
+const fs = require('fs/promises');
 const documentAccessModel = require('../models/document-access.model');
 const documentPreviewService = require('../services/document-preview.service');
 const { POINT_POLICY } = require('../config/point-policy');
+const pdfParse = require('pdf-parse');
+
+const LOCKED_PREVIEW_MIN_TOTAL_PAGES = 5;
+const LOCKED_PREVIEW_PAGE_LIMIT = 3;
 
 const parseDocumentId = (id) => {
     const documentId = Number(id);
@@ -21,12 +26,88 @@ const buildGuestLockedOverlay = () => ({
     requiredPoints: POINT_POLICY.unlock.previewThreshold,
 });
 
+const buildGuestLoginRequiredOverlay = () => ({
+    title: 'Vui long dang nhap',
+    message: 'Vui long dang nhap de tiep tuc xem tai lieu nay.',
+    helperText: 'Tai lieu duoi 5 trang yeu cau dang nhap de truy cap.',
+    requiredPoints: POINT_POLICY.unlock.previewThreshold,
+});
+
+const buildLockedInsufficientPointsOverlay = () => ({
+    title: 'Khong du diem',
+    message: `Ban can toi thieu ${POINT_POLICY.unlock.previewThreshold} diem de truy cap tai lieu nay.`,
+    helperText: 'Tai lieu duoi 5 trang khong cho phep xem preview.',
+    requiredPoints: POINT_POLICY.unlock.previewThreshold,
+});
+
+const getPreparedViewerTotalPages = async ({ documentId, preparedViewer }) => {
+    if (String(preparedViewer?.viewerKind || '').toLowerCase() !== 'pdf') {
+        return null;
+    }
+
+    const viewerFile = await documentPreviewService.getPreparedDocumentViewerFile(documentId);
+    if (!viewerFile?.absolutePath) {
+        return null;
+    }
+
+    const buffer = await fs.readFile(viewerFile.absolutePath);
+    const parsed = await pdfParse(buffer);
+    const pageCount = Number(parsed?.numpages || 0);
+
+    return Number.isInteger(pageCount) && pageCount > 0 ? pageCount : null;
+};
+
+const applyLockedPreviewPolicyByPageCount = ({
+    policy,
+    totalPages,
+    mode,
+}) => {
+    if (!policy || !policy.isLocked) {
+        return policy;
+    }
+
+    if (!Number.isInteger(totalPages) || totalPages <= 0) {
+        return {
+            ...policy,
+            canPreview: false,
+            previewPageLimit: 0,
+        };
+    }
+
+    if (totalPages > LOCKED_PREVIEW_MIN_TOTAL_PAGES) {
+        return {
+            ...policy,
+            canPreview: true,
+            previewPageLimit: LOCKED_PREVIEW_PAGE_LIMIT,
+        };
+    }
+
+    if (mode === 'guest') {
+        return {
+            ...policy,
+            canPreview: false,
+            previewPageLimit: 0,
+            reason: 'Vui long dang nhap.',
+            lockedOverlay: buildGuestLoginRequiredOverlay(),
+        };
+    }
+
+    return {
+        ...policy,
+        canPreview: false,
+        previewPageLimit: 0,
+        reason: `Ban can toi thieu ${POINT_POLICY.unlock.previewThreshold} diem de truy cap tai lieu nay.`,
+        lockedOverlay: buildLockedInsufficientPointsOverlay(),
+    };
+};
+
 const toViewerPayload = ({
     documentId,
     preparedViewer,
+    canPreview = true,
     canFullView = false,
 }) => {
-    const previewViewerUrl = preparedViewer.viewerUrl
+    const previewViewerUrl = canPreview && preparedViewer.viewerUrl
         ? `/api/documents/${documentId}/preview/content`
         : '';
 
@@ -58,6 +139,18 @@ const getDocumentAccessPolicy = async (req, res, next) => {
             mimeType: document.mimeType,
             title: document.title,
         });
+        const totalPages = await getPreparedViewerTotalPages({
+            documentId,
+            preparedViewer,
+        });
+        const effectivePolicy =
+            policy.accessState === 'locked_points'
+                ? applyLockedPreviewPolicyByPageCount({
+                    policy,
+                    totalPages,
+                    mode: 'points',
+                })
+                : policy;
 
         res.json({
             success: true,
@@ -69,9 +162,11 @@ const getDocumentAccessPolicy = async (req, res, next) => {
                 viewer: toViewerPayload({
                     documentId,
                     preparedViewer,
-                    canFullView: policy.canFullView,
+                    canPreview: effectivePolicy.canPreview,
+                    canFullView: effectivePolicy.canFullView,
                 }),
-                ...policy,
+                totalPages,
+                ...effectivePolicy,
             },
         });
     } catch (error) {
@@ -323,14 +418,12 @@ const getPublicDocumentPreview = async (req, res, next) => {
             mimeType: document.mimeType,
             title: document.title,
         });
-
-        res.json({
-            success: true,
-            message: 'Public preview fetched successfully.',
-            data: {
-                documentId,
-                documentTitle: document.title,
-                originalFileName: document.originalFileName,
+        const totalPages = await getPreparedViewerTotalPages({
+            documentId,
+            preparedViewer,
+        });
+        const guestPolicy = applyLockedPreviewPolicyByPageCount({
+            policy: {
                 accessState: 'guest_locked',
                 points: 0,
                 requiredPoints: POINT_POLICY.unlock.previewThreshold,
@@ -345,10 +438,24 @@ const getPublicDocumentPreview = async (req, res, next) => {
                 tier: 'guest_locked',
                 reason: 'Please login/register to unlock full access.',
                 lockedOverlay: buildGuestLockedOverlay(),
+            },
+            totalPages,
+            mode: 'guest',
+        });
+
+        res.json({
+            success: true,
+            message: 'Public preview fetched successfully.',
+            data: {
+                documentId,
+                documentTitle: document.title,
+                originalFileName: document.originalFileName,
+                totalPages,
+                ...guestPolicy,
                 viewer: {
                     ...preparedViewer,
                     viewerUrl: '',
-                    previewViewerUrl: preparedViewer.viewerUrl
+                    previewViewerUrl: guestPolicy.canPreview && preparedViewer.viewerUrl
                         ? `/api/documents/${documentId}/preview/content`
                         : '',
                     blockedByPolicy: true,
@@ -391,6 +498,19 @@ const streamPublicPreviewContent = async (req, res, next) => {
             const error = new Error('Prepared preview file is not available yet.');
             error.statusCode = 404;
             throw error;
+        }
+
+        if (String(preparedViewerFile.kind || '').toLowerCase() === 'pdf') {
+            const buffer = await fs.readFile(preparedViewerFile.absolutePath);
+            const parsed = await pdfParse(buffer);
+            const totalPages = Number(parsed?.numpages || 0);
+            const canPreview =
+                Number.isInteger(totalPages) && totalPages > LOCKED_PREVIEW_MIN_TOTAL_PAGES;
+            if (!canPreview) {
+                const error = new Error('Preview is unavailable for documents with 5 pages or fewer.');
+                error.statusCode = 403;
+                throw error;
+            }
         }
 
         res.setHeader('Content-Type', preparedViewerFile.mimeType);

@@ -5,6 +5,7 @@ import Topbar from "./dashboard/Topbar";
 import CategoriesTab from "./dashboard/tabs/CategoriesTab";
 import HomeTab from "./dashboard/tabs/HomeTab";
 import ModerationTab from "./dashboard/tabs/ModerationTab";
+import MyDocumentsTab from "./dashboard/tabs/MyDocumentsTab";
 import MyLibraryTab from "./dashboard/tabs/MyLibraryTab";
 import NotificationsTab from "./dashboard/tabs/NotificationsTab";
 import PointsTab from "./dashboard/tabs/PointsTab";
@@ -40,6 +41,8 @@ function DashboardShell(props) {
   } = props;
   const mainRef = useRef(null);
   const roleClass = `role-${user?.role || "user"}`;
+  const tabClass = `tab-${String(activeTab || "home")}`;
+  const previewOpenClass = previewDoc ? "preview-open" : "";
   const [statusToast, setStatusToast] = useState("");
   const [errorToast, setErrorToast] = useState("");
 
@@ -84,7 +87,11 @@ function DashboardShell(props) {
   }, [error]);
 
   return (
-    <div className={`app-shell ${roleClass} ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+    <div
+      className={`app-shell ${roleClass} ${tabClass} ${previewOpenClass} ${
+        isSidebarCollapsed ? "sidebar-collapsed" : ""
+      }`}
+    >
       <Sidebar {...props} />
 
       <button
@@ -106,7 +113,8 @@ function DashboardShell(props) {
         </div>
 
         <div key={activeTab === "reader" ? `reader-${previewDoc?.documentId || "empty"}` : activeTab}>
-          {(activeTab === "home" || activeTab === "recent") && <HomeTab {...props} />}
+          {activeTab === "home" && <HomeTab {...props} />}
+          {activeTab === "recent" && <MyDocumentsTab {...props} />}
           {activeTab === "search" && <SearchTab {...props} />}
           {activeTab === "qa" && <QaTab {...props} />}
           {activeTab === "profile" && <ProfileTab {...props} />}
