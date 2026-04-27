@@ -2,31 +2,47 @@ function LoginFormView(props) {
   const { model, controller } = props;
 
   return (
-    <form className="auth-card" onSubmit={controller.onSubmit}>
-      <h2>Sign in</h2>
-      <p className="auth-card-subtitle">Continue with your NeuShare account.</p>
-      <input
-        placeholder="Username"
-        value={model.loginForm.username}
-        onChange={(e) => controller.onChangeUsername(e.target.value)}
-      />
-      <div className="password-field">
-        <input
-          placeholder="Password"
-          type={model.showLoginPassword ? "text" : "password"}
-          value={model.loginForm.password}
-          onChange={(e) => controller.onChangePassword(e.target.value)}
-        />
-        <button
-          type="button"
-          className="password-toggle"
-          onClick={controller.onTogglePassword}
-          aria-label={model.showLoginPassword ? "Hide password" : "Show password"}
-          title={model.showLoginPassword ? "Hide password" : "Show password"}
-        >
-          {model.showLoginPassword ? "Hide" : "Show"}
-        </button>
+    <form className="auth-card auth-card-animated" onSubmit={controller.onSubmit}>
+      <div className="auth-card-head">
+        <span className="auth-form-badge">Welcome back</span>
+        <h2>Sign in</h2>
+        <p className="auth-card-subtitle">Continue with your NeuShare account.</p>
       </div>
+
+      <label className="auth-field auth-field-drop" style={{ "--delay": "60ms" }}>
+        <span>Username</span>
+        <div className="auth-input-wrap">
+          <span className="auth-input-icon">ID</span>
+          <input
+            placeholder="Enter your username"
+            value={model.loginForm.username}
+            onChange={(e) => controller.onChangeUsername(e.target.value)}
+          />
+        </div>
+      </label>
+
+      <label className="auth-field auth-field-drop" style={{ "--delay": "120ms" }}>
+        <span>Password</span>
+        <div className="password-field auth-input-wrap">
+          <span className="auth-input-icon">PW</span>
+          <input
+            placeholder="Enter your password"
+            type={model.showLoginPassword ? "text" : "password"}
+            value={model.loginForm.password}
+            onChange={(e) => controller.onChangePassword(e.target.value)}
+          />
+          <button
+            type="button"
+            className="password-toggle"
+            onClick={controller.onTogglePassword}
+            aria-label={model.showLoginPassword ? "Hide password" : "Show password"}
+            title={model.showLoginPassword ? "Hide password" : "Show password"}
+          >
+            {model.showLoginPassword ? "Hide" : "Show"}
+          </button>
+        </div>
+      </label>
+
       <div className="auth-row auth-login-row">
         <label className="auth-check">
           <input
@@ -40,10 +56,12 @@ function LoginFormView(props) {
           Forgot password?
         </button>
       </div>
-      <button type="submit" className="primary-btn">
-        Login
+
+      <button type="submit" className="primary-btn auth-submit-btn">
+        <span>Login</span>
+        <span className="auth-btn-arrow">{"->"}</span>
       </button>
-      <button type="button" onClick={controller.goRegister}>
+      <button type="button" className="auth-secondary-btn" onClick={controller.goRegister}>
         Create account
       </button>
       <button type="button" className="link-btn" onClick={controller.goGuest}>
