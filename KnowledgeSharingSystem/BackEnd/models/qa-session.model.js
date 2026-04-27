@@ -606,7 +606,16 @@ const closeSession = async ({ sessionId, closedByUserId }) => {
     return getSessionByIdForUser({ sessionId, userId: closedByUserId });
 };
 
-const rateSession = async ({ sessionId, askerUserId, stars, feedback = null }) => {
+const rateSession = async ({
+    sessionId,
+    askerUserId,
+    stars,
+    feedback = null,
+    questionSummary = null,
+    authorSolution = null,
+    satisfactionNote = null,
+    isSatisfied = null,
+}) => {
     const pool = getPool();
 
     if (isPostgresClient()) {
@@ -668,14 +677,47 @@ const rateSession = async ({ sessionId, askerUserId, stars, feedback = null }) =
                 `,
                 [sessionId, askerUserId, session.ownerUserId, stars, feedback]
             );
+            const ratingId = ratingResult.rows[0].ratingId;
+
+            const feedbackResult = await client.query(
+                `
+                    INSERT INTO qa_rating_feedback (
+                        rating_id,
+                        session_id,
+                        document_id,
+                        user_id,
+                        question_summary,
+                        author_solution,
+                        satisfaction_note,
+                        is_satisfied
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    RETURNING feedback_id AS "feedbackId";
+                `,
+                [
+                    ratingId,
+                    sessionId,
+                    session.documentId,
+                    askerUserId,
+                    questionSummary || null,
+                    authorSolution || null,
+                    satisfactionNote || feedback || null,
+                    typeof isSatisfied === 'boolean' ? isSatisfied : null,
+                ]
+            );
 
             await client.query('COMMIT');
 
             return {
-                ratingId: ratingResult.rows[0].ratingId,
+                ratingId,
+                feedbackId: feedbackResult.rows[0]?.feedbackId || null,
                 ...session,
                 stars,
                 feedback,
+                questionSummary,
+                authorSolution,
+                satisfactionNote: satisfactionNote || feedback || null,
+                isSatisfied: typeof isSatisfied === 'boolean' ? isSatisfied : null,
             };
         } catch (error) {
             await client.query('ROLLBACK');

@@ -180,6 +180,9 @@ function PreviewPanel(props) {
     onStartQa,
     onReviewCommentPoint,
     onHideComment,
+    onOpenHiddenKnowledge,
+    onSaveHiddenKnowledge,
+    onAddHiddenKnowledgeFromComment,
     isGuestMode,
     onNavigateToLogin,
     onNavigateToRegister,
@@ -201,6 +204,15 @@ function PreviewPanel(props) {
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [isSubmittingQa, setIsSubmittingQa] = useState(false);
   const [isEarnPointsOpen, setIsEarnPointsOpen] = useState(false);
+  const [isHiddenKnowledgeOpen, setIsHiddenKnowledgeOpen] = useState(false);
+  const [hiddenKnowledge, setHiddenKnowledge] = useState(null);
+  const [hiddenKnowledgeTitle, setHiddenKnowledgeTitle] = useState("");
+  const [hiddenKnowledgeContent, setHiddenKnowledgeContent] = useState("");
+  const [hiddenKnowledgeStatus, setHiddenKnowledgeStatus] = useState("draft");
+  const [hiddenKnowledgeError, setHiddenKnowledgeError] = useState("");
+  const [isLoadingHiddenKnowledge, setIsLoadingHiddenKnowledge] = useState(false);
+  const [isSavingHiddenKnowledge, setIsSavingHiddenKnowledge] = useState(false);
+  const [addingKnowledgeCommentId, setAddingKnowledgeCommentId] = useState(null);
   const previewFrameWrapRef = useRef(null);
 
   if (!previewDoc) return null;
@@ -333,6 +345,76 @@ function PreviewPanel(props) {
 
   const closeEarnPointsModal = () => {
     setIsEarnPointsOpen(false);
+  };
+
+  const hydrateHiddenKnowledgeDraft = (data) => {
+    setHiddenKnowledge(data || null);
+    setHiddenKnowledgeTitle(data?.title || "");
+    setHiddenKnowledgeContent(data?.content || "");
+    setHiddenKnowledgeStatus(data?.status || "draft");
+  };
+
+  const openHiddenKnowledgeModal = async () => {
+    setIsHiddenKnowledgeOpen(true);
+    setHiddenKnowledgeError("");
+    hydrateHiddenKnowledgeDraft(null);
+
+    if (!onOpenHiddenKnowledge) {
+      setHiddenKnowledgeError("Hidden knowledge is not available in this screen.");
+      return;
+    }
+
+    setIsLoadingHiddenKnowledge(true);
+    try {
+      const data = await onOpenHiddenKnowledge(docId);
+      hydrateHiddenKnowledgeDraft(data);
+    } catch (error) {
+      setHiddenKnowledgeError(error?.message || "Unable to open hidden knowledge.");
+    } finally {
+      setIsLoadingHiddenKnowledge(false);
+    }
+  };
+
+  const closeHiddenKnowledgeModal = () => {
+    setIsHiddenKnowledgeOpen(false);
+    setHiddenKnowledgeError("");
+    hydrateHiddenKnowledgeDraft(null);
+  };
+
+  const saveHiddenKnowledge = async () => {
+    if (!onSaveHiddenKnowledge || isSavingHiddenKnowledge || isBusy) return;
+    setIsSavingHiddenKnowledge(true);
+    setHiddenKnowledgeError("");
+    try {
+      const data = await onSaveHiddenKnowledge(docId, {
+        title: hiddenKnowledgeTitle,
+        content: hiddenKnowledgeContent,
+        status: hiddenKnowledgeStatus,
+      });
+      hydrateHiddenKnowledgeDraft(data);
+    } catch (error) {
+      setHiddenKnowledgeError(error?.message || "Unable to save hidden knowledge.");
+    } finally {
+      setIsSavingHiddenKnowledge(false);
+    }
+  };
+
+  const addCommentToHiddenKnowledge = async (comment) => {
+    if (!onAddHiddenKnowledgeFromComment || addingKnowledgeCommentId || isBusy) return;
+    const commentId = Number(comment?.commentId || 0);
+    if (!commentId) return;
+    setAddingKnowledgeCommentId(commentId);
+    try {
+      await onAddHiddenKnowledgeFromComment(comment);
+      if (isHiddenKnowledgeOpen && onOpenHiddenKnowledge) {
+        const data = await onOpenHiddenKnowledge(docId);
+        hydrateHiddenKnowledgeDraft(data);
+      }
+    } catch (error) {
+      window.alert(error?.message || "Unable to add this comment to hidden knowledge.");
+    } finally {
+      setAddingKnowledgeCommentId(null);
+    }
   };
 
   const focusPreviewCenter = () => {
@@ -511,6 +593,17 @@ function PreviewPanel(props) {
               <button type="button" onClick={() => handleReviewCommentPoint(comment)}>
                 {hasPointEvaluation ? "Sua danh gia diem" : "Evaluate 10-15"}
               </button>
+              {onAddHiddenKnowledgeFromComment && (
+                <button
+                  type="button"
+                  disabled={isBusy || Number(addingKnowledgeCommentId || 0) === Number(comment.commentId)}
+                  onClick={() => addCommentToHiddenKnowledge(comment)}
+                >
+                  {Number(addingKnowledgeCommentId || 0) === Number(comment.commentId)
+                    ? "Adding..."
+                    : "Add experience"}
+                </button>
+              )}
               <button
                 type="button"
                 className="danger-ghost"
@@ -655,6 +748,9 @@ function PreviewPanel(props) {
             </button>
             <button type="button" disabled={isBusy} onClick={() => onToggleSave && onToggleSave(docId)}>
               {reaction.saved ? "Saved" : "Save"}
+            </button>
+            <button type="button" disabled={isBusy} onClick={openHiddenKnowledgeModal}>
+              {"T\u1ed5ng h\u1ee3p kinh nghi\u1ec7m"}
             </button>
           </div>
         )}
@@ -869,6 +965,83 @@ function PreviewPanel(props) {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {isHiddenKnowledgeOpen && (
+        <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="report-modal hidden-knowledge-modal">
+            <div className="report-modal-head">
+              <h3>{"T\u1ed5ng h\u1ee3p kinh nghi\u1ec7m"}</h3>
+              <button type="button" className="report-close-btn" onClick={closeHiddenKnowledgeModal}>
+                x
+              </button>
+            </div>
+
+            {isLoadingHiddenKnowledge ? (
+              <p className="report-modal-sub">Loading hidden knowledge...</p>
+            ) : hiddenKnowledgeError ? (
+              <div className="hidden-knowledge-error">
+                <strong>Access blocked</strong>
+                <p>{hiddenKnowledgeError}</p>
+                <small>Users need more than 60 points to view this page.</small>
+              </div>
+            ) : hiddenKnowledge?.canEdit ? (
+              <div className="hidden-knowledge-editor">
+                <label>
+                  <span>Title</span>
+                  <input
+                    type="text"
+                    value={hiddenKnowledgeTitle}
+                    onChange={(event) => setHiddenKnowledgeTitle(event.target.value)}
+                    disabled={isSavingHiddenKnowledge || isBusy}
+                  />
+                </label>
+                <label>
+                  <span>Status</span>
+                  <select
+                    value={hiddenKnowledgeStatus}
+                    onChange={(event) => setHiddenKnowledgeStatus(event.target.value)}
+                    disabled={isSavingHiddenKnowledge || isBusy}
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="published">Published</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Content</span>
+                  <textarea
+                    value={hiddenKnowledgeContent}
+                    onChange={(event) => setHiddenKnowledgeContent(event.target.value)}
+                    disabled={isSavingHiddenKnowledge || isBusy}
+                    rows={14}
+                  />
+                </label>
+                <div className="report-modal-actions">
+                  <button type="button" onClick={closeHiddenKnowledgeModal}>
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    disabled={isSavingHiddenKnowledge || isBusy || !hiddenKnowledgeTitle.trim()}
+                    onClick={saveHiddenKnowledge}
+                  >
+                    {isSavingHiddenKnowledge ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <article className="hidden-knowledge-reader">
+                <h4>{hiddenKnowledgeTitle || hiddenKnowledge?.title}</h4>
+                <p className="report-modal-sub">
+                  Required points: {Number(hiddenKnowledge?.requiredPoints || hiddenKnowledge?.minPointsToView || 61)}
+                </p>
+                <pre>{hiddenKnowledgeContent || "No hidden knowledge content yet."}</pre>
+              </article>
+            )}
           </div>
         </div>
       )}

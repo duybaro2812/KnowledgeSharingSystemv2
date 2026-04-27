@@ -950,16 +950,30 @@ function AppController() {
     }, { actionKey: `qa:close:${numericId}` });
   };
 
-  const rateQaSession = async (sessionId, stars, feedback = "") => {
+  const rateQaSession = async (sessionId, stars, feedbackInput = "") => {
     const numericId = Number(sessionId || 0);
     if (!token || !Number.isInteger(numericId) || numericId <= 0) return;
+    const feedbackPayload =
+      feedbackInput && typeof feedbackInput === "object"
+        ? feedbackInput
+        : { feedback: String(feedbackInput || "") };
 
     clearFeedback();
     try {
       await apiRequest(`/qa-sessions/${numericId}/rate`, {
         method: "POST",
         token,
-        body: { stars, feedback: feedback.trim() || null },
+        body: {
+          stars,
+          feedback: String(feedbackPayload.feedback || "").trim() || null,
+          questionSummary: String(feedbackPayload.questionSummary || "").trim() || null,
+          authorSolution: String(feedbackPayload.authorSolution || "").trim() || null,
+          satisfactionNote: String(feedbackPayload.satisfactionNote || "").trim() || null,
+          isSatisfied:
+            typeof feedbackPayload.isSatisfied === "boolean"
+              ? feedbackPayload.isSatisfied
+              : null,
+        },
       });
 
       setQaRatedSessionMap((prev) => ({
@@ -1915,6 +1929,109 @@ function AppController() {
     await hideCommentForModeration(commentId, Number.isInteger(documentId) && documentId > 0 ? documentId : null);
   };
 
+  const loadHiddenKnowledgeForPreview = async (documentId) => {
+    const numericId = Number(documentId || 0);
+    if (!token) {
+      throw new Error(requireAuthMessage);
+    }
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      throw new Error("A valid document id is required.");
+    }
+
+    const payload = await apiRequest(`/documents/${numericId}/hidden-knowledge`, { token });
+    return payload?.data || null;
+  };
+
+  const saveHiddenKnowledgeForPreview = async (documentId, body) => {
+    const numericId = Number(documentId || 0);
+    if (!token) {
+      throw new Error(requireAuthMessage);
+    }
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      throw new Error("A valid document id is required.");
+    }
+
+    const payload = await apiRequest(`/documents/${numericId}/hidden-knowledge`, {
+      method: "PATCH",
+      token,
+      body,
+    });
+    setStatus("Hidden knowledge updated successfully.");
+    return payload?.data || null;
+  };
+
+  const addHiddenKnowledgeSource = async ({ documentId, sourceType, sourceId = null, extractedText = "" }) => {
+    const numericId = Number(documentId || 0);
+    if (!token) {
+      throw new Error(requireAuthMessage);
+    }
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      throw new Error("A valid document id is required.");
+    }
+
+    const payload = await apiRequest(`/documents/${numericId}/hidden-knowledge/sources`, {
+      method: "POST",
+      token,
+      body: {
+        sourceType,
+        sourceId,
+        extractedText,
+      },
+    });
+    setStatus(payload?.message || "Source added to hidden knowledge.");
+    return payload?.data || null;
+  };
+
+  const addCommentToHiddenKnowledge = async (comment) => {
+    const documentId = Number(comment?.documentId || previewDoc?.documentId || 0);
+    const commentId = Number(comment?.commentId || 0);
+    if (!Number.isInteger(commentId) || commentId <= 0) {
+      throw new Error("A valid comment id is required.");
+    }
+    return addHiddenKnowledgeSource({
+      documentId,
+      sourceType: "comment",
+      sourceId: commentId,
+      extractedText: comment?.content || "",
+    });
+  };
+
+  const addQaRatingToHiddenKnowledge = async (event) => {
+    const meta = (() => {
+      if (!event?.metadata) return event?.metadataJson || {};
+      if (typeof event.metadata === "object") return event.metadata;
+      try {
+        return JSON.parse(event.metadata);
+      } catch {
+        return {};
+      }
+    })();
+    const documentId = Number(event?.documentId || meta?.documentId || 0);
+    const feedbackId = Number(meta?.feedbackId || 0);
+    const stars = Number(meta?.stars || 0);
+    const fallbackParts = [
+      stars > 0 ? `Rating: ${stars}/5` : "",
+      meta?.questionSummary ? `Thac mac: ${meta.questionSummary}` : "",
+      meta?.authorSolution ? `Cach tac gia giai quyet: ${meta.authorSolution}` : "",
+      meta?.satisfactionNote ? `Danh gia hai long: ${meta.satisfactionNote}` : "",
+      meta?.feedback ? `Feedback: ${meta.feedback}` : "",
+    ].filter(Boolean);
+
+    if (feedbackId > 0) {
+      return addHiddenKnowledgeSource({
+        documentId,
+        sourceType: "qa_rating_feedback",
+        sourceId: feedbackId,
+      });
+    }
+
+    return addHiddenKnowledgeSource({
+      documentId,
+      sourceType: "manual",
+      extractedText: fallbackParts.join("\n") || `Q&A rating event #${event?.eventId || ""}`,
+    });
+  };
+
   const downloadPreviewDocument = async (documentId, previewDocState) => {
     const numericId = Number(documentId || 0);
     if (!token || !Number.isInteger(numericId) || numericId <= 0) return;
@@ -2286,6 +2403,10 @@ function AppController() {
     },
     onReviewCommentPointFromPreview: reviewCommentPointFromPreviewV3,
     onHideCommentFromPreview: hideCommentFromPreview,
+    onOpenHiddenKnowledge: loadHiddenKnowledgeForPreview,
+    onSaveHiddenKnowledge: saveHiddenKnowledgeForPreview,
+    onAddHiddenKnowledgeFromComment: addCommentToHiddenKnowledge,
+    onAddHiddenKnowledgeFromQaRating: addQaRatingToHiddenKnowledge,
     getDocReactionCounts,
     toggleLike,
     toggleDislike,

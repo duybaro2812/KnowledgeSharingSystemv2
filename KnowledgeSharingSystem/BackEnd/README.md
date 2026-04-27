@@ -14,6 +14,8 @@
 Backend is now configured for **PostgreSQL**.
 
 - Schema baseline: `sql/postgres/001_schema.sql`
+- Hidden Knowledge migration: `sql/postgres/002_hidden_knowledge.sql`
+- Apply Hidden Knowledge migration: `npm run db:pg:hidden-knowledge`
 - Full one-shot DB validation: `sql/postgres_full_system_check.sql`
 
 Current PostgreSQL endpoint status (migration gate):

@@ -9,6 +9,7 @@ const {
 const documentController = require('../controllers/document.controller');
 const documentEngagementController = require('../controllers/document-engagement.controller');
 const documentAccessController = require('../controllers/document-access.controller');
+const hiddenKnowledgeController = require('../controllers/hidden-knowledge.controller');
 
 const router = express.Router();
 
@@ -91,6 +92,25 @@ router.patch(
 router.get('/:id/engagement', authMiddleware, documentEngagementController.getEngagement);
 router.patch('/:id/reaction', authMiddleware, documentEngagementController.updateReaction);
 router.patch('/:id/save', authMiddleware, documentEngagementController.updateSavedState);
+router.get('/:id/hidden-knowledge', authMiddleware, hiddenKnowledgeController.getHiddenKnowledge);
+router.patch(
+    '/:id/hidden-knowledge',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    hiddenKnowledgeController.updateHiddenKnowledge
+);
+router.get(
+    '/:id/hidden-knowledge/sources',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    hiddenKnowledgeController.listSources
+);
+router.post(
+    '/:id/hidden-knowledge/sources',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    hiddenKnowledgeController.addSource
+);
 router.get('/:id/preview', documentAccessController.getPublicDocumentPreview);
 router.get('/:id/preview/content', documentAccessController.streamPublicPreviewContent);
 router.get('/:id/access', authMiddleware, documentAccessController.getDocumentAccessPolicy);

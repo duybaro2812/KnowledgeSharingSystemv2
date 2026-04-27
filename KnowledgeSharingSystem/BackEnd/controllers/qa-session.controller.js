@@ -258,6 +258,25 @@ const rateSession = async (req, res, next) => {
             fieldName: 'feedback',
             maxLength: VALIDATION_RULES.qa.feedbackMax,
         });
+        const questionSummary = normalizeOptionalText({
+            value: req.body?.questionSummary,
+            fieldName: 'questionSummary',
+            maxLength: 2000,
+        });
+        const authorSolution = normalizeOptionalText({
+            value: req.body?.authorSolution,
+            fieldName: 'authorSolution',
+            maxLength: 2000,
+        });
+        const satisfactionNote = normalizeOptionalText({
+            value: req.body?.satisfactionNote,
+            fieldName: 'satisfactionNote',
+            maxLength: 2000,
+        });
+        const isSatisfied =
+            typeof req.body?.isSatisfied === 'boolean'
+                ? req.body.isSatisfied
+                : null;
 
         if (!Number.isInteger(sessionId) || sessionId <= 0) {
             const error = new Error('A valid session id is required.');
@@ -276,6 +295,10 @@ const rateSession = async (req, res, next) => {
             askerUserId: req.user.userId,
             stars,
             feedback,
+            questionSummary,
+            authorSolution,
+            satisfactionNote,
+            isSatisfied,
         });
 
         const suggestedPoints = getSuggestedPointsByStars(stars);
@@ -290,6 +313,11 @@ const rateSession = async (req, res, next) => {
                 sessionId: rated.sessionId,
                 stars,
                 feedback,
+                feedbackId: rated.feedbackId || null,
+                questionSummary,
+                authorSolution,
+                satisfactionNote,
+                isSatisfied,
                 askedByUserId: rated.askerUserId,
                 suggestedPoints,
             },

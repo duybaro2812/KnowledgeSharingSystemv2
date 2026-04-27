@@ -143,6 +143,9 @@ function DashboardShell(props) {
               onCreateReply={createReplyForPreview}
               onReviewCommentPoint={props.onReviewCommentPointFromPreview}
               onHideComment={props.onHideCommentFromPreview}
+              onOpenHiddenKnowledge={props.onOpenHiddenKnowledge}
+              onSaveHiddenKnowledge={props.onSaveHiddenKnowledge}
+              onAddHiddenKnowledgeFromComment={props.onAddHiddenKnowledgeFromComment}
               isGuestMode={props.isGuestMode}
               onNavigateToLogin={props.onNavigateToLogin}
               onNavigateToRegister={props.onNavigateToRegister}

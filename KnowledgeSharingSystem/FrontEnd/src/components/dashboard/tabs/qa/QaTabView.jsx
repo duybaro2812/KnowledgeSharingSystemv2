@@ -100,6 +100,9 @@ function QaTabView({ model, controller }) {
   const [draftMessage, setDraftMessage] = useState("");
   const [selectedStars, setSelectedStars] = useState(0);
   const [draftFeedback, setDraftFeedback] = useState("");
+  const [draftQuestionSummary, setDraftQuestionSummary] = useState("");
+  const [draftAuthorSolution, setDraftAuthorSolution] = useState("");
+  const [draftIsSatisfied, setDraftIsSatisfied] = useState(true);
   const messageListRef = useRef(null);
 
   const sessions = useMemo(() => {
@@ -151,6 +154,9 @@ function QaTabView({ model, controller }) {
     const preset = Number(activeSession?.rating || activeSession?.stars || ratedValue || 0);
     setSelectedStars(preset > 0 ? Math.min(5, preset) : 0);
     setDraftFeedback("");
+    setDraftQuestionSummary("");
+    setDraftAuthorSolution("");
+    setDraftIsSatisfied(true);
     setDraftMessage("");
   }, [activeSessionId, activeSession?.rating, activeSession?.stars, ratedValue]);
 
@@ -181,7 +187,13 @@ function QaTabView({ model, controller }) {
 
   const handleRateSession = async () => {
     if (!activeSessionId || model.isBusy || selectedStars < 1) return;
-    await controller.onRateSession(activeSessionId, selectedStars, draftFeedback);
+    await controller.onRateSession(activeSessionId, selectedStars, {
+      feedback: draftFeedback,
+      questionSummary: draftQuestionSummary,
+      authorSolution: draftAuthorSolution,
+      satisfactionNote: draftFeedback,
+      isSatisfied: draftIsSatisfied,
+    });
   };
 
   if (isListMode || !activeSession) {
@@ -324,6 +336,9 @@ function QaTabView({ model, controller }) {
           canSubmitRating ? (
             <section className="qa-rating-card">
               <h4>Rate this Q&A session</h4>
+              <p className="qa-rating-question">
+                Please describe your question, how the author resolved it, and whether you were satisfied.
+              </p>
               <div className="qa-stars" role="radiogroup" aria-label="Choose rating from one to five stars">
                 {[1, 2, 3, 4, 5].map((value) => (
                   <button
@@ -338,12 +353,35 @@ function QaTabView({ model, controller }) {
                 ))}
               </div>
               <textarea
-                value={draftFeedback}
-                onChange={(event) => setDraftFeedback(event.target.value)}
-                placeholder="Optional feedback for this session"
-                maxLength={500}
+                value={draftQuestionSummary}
+                onChange={(event) => setDraftQuestionSummary(event.target.value)}
+                placeholder="What was your question or confusion?"
+                maxLength={2000}
                 disabled={model.isBusy}
               />
+              <textarea
+                value={draftAuthorSolution}
+                onChange={(event) => setDraftAuthorSolution(event.target.value)}
+                placeholder="How did the author explain or solve it?"
+                maxLength={2000}
+                disabled={model.isBusy}
+              />
+              <textarea
+                value={draftFeedback}
+                onChange={(event) => setDraftFeedback(event.target.value)}
+                placeholder="Were you satisfied with the answer?"
+                maxLength={2000}
+                disabled={model.isBusy}
+              />
+              <label className="qa-rating-satisfied">
+                <input
+                  type="checkbox"
+                  checked={draftIsSatisfied}
+                  disabled={model.isBusy}
+                  onChange={(event) => setDraftIsSatisfied(event.target.checked)}
+                />
+                <span>I am satisfied with this answer.</span>
+              </label>
               <button
                 type="button"
                 className="primary-btn"

@@ -9,6 +9,7 @@ const EVENT_TYPES = {
     DOCUMENT_VIEWED: 'document_viewed',
     DOCUMENT_SAVED_BY_OTHER: 'document_saved_by_other',
     QA_SESSION_RATED: 'qa_session_rated',
+    HIDDEN_KNOWLEDGE_CONTRIBUTION: 'hidden_knowledge_contribution',
 };
 
 const EVENT_TO_TRANSACTION_TYPE = {
@@ -20,6 +21,7 @@ const EVENT_TO_TRANSACTION_TYPE = {
     document_viewed: 'moderation_reward',
     document_saved_by_other: 'moderation_reward',
     qa_session_rated: 'moderation_reward',
+    hidden_knowledge_contribution: 'hidden_knowledge_reward',
 };
 
 const createPointEvent = async ({

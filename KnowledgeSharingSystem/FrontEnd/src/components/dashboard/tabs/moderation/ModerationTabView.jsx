@@ -273,6 +273,13 @@ function ModerationTabView(props) {
                           >
                             Reject points
                           </button>
+                          <button
+                            type="button"
+                            disabled={controlsDisabled}
+                            onClick={() => controller.onAddCommentExperience(comment)}
+                          >
+                            Add experience
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -373,6 +380,13 @@ function ModerationTabView(props) {
                     }
                   >
                     Reject
+                  </button>
+                  <button
+                    type="button"
+                    disabled={controlsDisabled}
+                    onClick={() => controller.onAddQaRatingExperience(event)}
+                  >
+                    Add experience
                   </button>
                 </div>
               </article>

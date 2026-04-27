@@ -75,6 +75,22 @@ export function createModerationController(input) {
     },
     onHideComment: (commentId, documentId = null) =>
       ensureModerator() && input.hideCommentForModeration(commentId, documentId),
+    onAddCommentExperience: async (comment) => {
+      if (!ensureModerator() || !input.onAddHiddenKnowledgeFromComment) return;
+      try {
+        await input.onAddHiddenKnowledgeFromComment(comment);
+      } catch (error) {
+        window.alert(error?.message || "Unable to add this comment to hidden knowledge.");
+      }
+    },
+    onAddQaRatingExperience: async (event) => {
+      if (!ensureModerator() || !input.onAddHiddenKnowledgeFromQaRating) return;
+      try {
+        await input.onAddHiddenKnowledgeFromQaRating(event);
+      } catch (error) {
+        window.alert(error?.message || "Unable to add this Q&A feedback to hidden knowledge.");
+      }
+    },
     onRefreshOverview: () => ensureModerator() && input.loadModerationOverview(),
   };
 }
