@@ -1,8 +1,10 @@
 export function createQaModel(input) {
   const userId = Number(input.user?.userId || 0);
+  const role = String(input.user?.role || "").trim().toLowerCase();
 
   return {
     isBusy: Boolean(input.isBusy),
+    isModerator: role === "moderator" || role === "admin",
     user: input.user || null,
     currentUserId: userId,
     sessions: Array.isArray(input.qaSessions) ? input.qaSessions : [],

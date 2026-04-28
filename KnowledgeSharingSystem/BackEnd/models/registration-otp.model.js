@@ -11,12 +11,19 @@ const createOrReplaceRegistrationOtp = async ({
     const pool = getPool();
 
     if (isPostgresClient()) {
-        await pool.query(
-            `
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                `
                 DELETE FROM registration_otps
                 WHERE (email = $1 OR username = $2)
                   AND is_used = FALSE;
-
+                `,
+                [email, username]
+            );
+            await client.query(
+                `
                 INSERT INTO registration_otps (
                     username,
                     name,
@@ -26,9 +33,16 @@ const createOrReplaceRegistrationOtp = async ({
                     expires_at
                 )
                 VALUES ($2, $3, $1, $4, $5, $6);
-            `,
-            [email, username, name, passwordHash, otpCode, expiresAt]
-        );
+                `,
+                [email, username, name, passwordHash, otpCode, expiresAt]
+            );
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
         return;
     }
 
@@ -157,12 +171,19 @@ const createOrReplaceForgotPasswordOtp = async ({
     const pool = getPool();
 
     if (isPostgresClient()) {
-        await pool.query(
-            `
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                `
                 DELETE FROM registration_otps
                 WHERE email = $1
                   AND is_used = FALSE;
-
+                `,
+                [email]
+            );
+            await client.query(
+                `
                 INSERT INTO registration_otps (
                     username,
                     name,
@@ -172,9 +193,16 @@ const createOrReplaceForgotPasswordOtp = async ({
                     expires_at
                 )
                 VALUES ($2, $3, $1, $4, $5, $6);
-            `,
-            [email, username, name, passwordHash, otpCode, expiresAt]
-        );
+                `,
+                [email, username, name, passwordHash, otpCode, expiresAt]
+            );
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
         return;
     }
 

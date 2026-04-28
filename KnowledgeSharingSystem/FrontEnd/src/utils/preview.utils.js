@@ -84,6 +84,7 @@ export const createOpenPreview = (setPreviewDoc) => (doc) => {
     lockedOverlay: doc.lockedOverlay || null,
     canDownload: Boolean(doc.canDownload),
     downloadCost: Number(doc.downloadCost || 0),
+    downloadConfirmation: doc.downloadConfirmation || null,
     viewerStatus: doc.viewerStatus || doc.viewer?.status || "",
     viewerKind: doc.viewerKind || doc.viewer?.viewerKind || null,
     securePreviewUrl: doc.securePreviewUrl || "",

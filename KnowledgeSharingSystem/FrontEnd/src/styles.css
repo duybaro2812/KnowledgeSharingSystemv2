@@ -4600,11 +4600,14 @@ textarea,
 .report-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: 5000;
+  min-height: 100dvh;
   background: rgba(14, 24, 43, 0.45);
   display: grid;
   place-items: center;
   padding: 16px;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .report-modal {
@@ -4616,6 +4619,8 @@ textarea,
   padding: 20px;
   display: grid;
   gap: 12px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
 }
 
 .report-modal-head {
@@ -4658,6 +4663,124 @@ textarea,
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.download-confirm-modal {
+  width: min(560px, 100%);
+  padding: 0;
+  overflow: hidden;
+  gap: 0;
+}
+
+.download-confirm-head {
+  padding: 20px 22px;
+  border-bottom: 1px solid #d9e4f2;
+}
+
+.download-confirm-head h3 {
+  font-size: 22px;
+  color: #102a43;
+}
+
+.download-confirm-head .report-modal-sub {
+  margin-top: 6px;
+}
+
+.download-confirm-summary {
+  margin: 18px 22px 12px;
+  border: 1px solid #d7e6f6;
+  border-radius: 16px;
+  background: #f4f9ff;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.download-confirm-summary > div {
+  padding: 14px 16px;
+  border-bottom: 1px solid #d7e6f6;
+  display: grid;
+  gap: 5px;
+}
+
+.download-confirm-summary > div:nth-child(odd) {
+  border-right: 1px solid #d7e6f6;
+}
+
+.download-confirm-summary > div:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+
+.download-confirm-summary span {
+  color: #66809d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.download-confirm-summary strong {
+  color: #0f2a45;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.download-confirm-note {
+  margin: 0 22px 18px;
+  color: #415b76;
+  font-weight: 700;
+}
+
+.download-confirm-actions {
+  padding: 16px 22px 20px;
+  border-top: 1px solid #e1eaf4;
+  background: #fbfdff;
+}
+
+.download-confirm-actions .primary-btn {
+  min-width: 170px;
+}
+
+.download-success-modal {
+  border-color: #b9e8c9;
+}
+
+.download-success-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 18px 22px;
+  padding: 16px;
+  border: 1px solid #c9ecd5;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #edfff4, #f8fffb);
+  color: #15385a;
+}
+
+.download-success-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #16a05d;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 900;
+  box-shadow: 0 10px 22px rgba(22, 160, 93, 0.22);
+}
+
+.download-success-body strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #102f4f;
+  font-size: 16px;
+}
+
+.download-success-body p {
+  margin: 0;
+  color: #42607e;
+  line-height: 1.5;
 }
 
 .earn-points-list {
@@ -5092,6 +5215,29 @@ textarea,
   white-space: pre-wrap;
   font-size: 15px;
   line-height: 1.38;
+}
+
+.qa-message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.qa-message-experience-btn {
+  border: 1px solid #b9d7c6;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #effbf5;
+  color: #0f6a3b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.qa-message-experience-btn:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
 }
 
 .qa-composer,

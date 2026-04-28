@@ -103,6 +103,7 @@ function QaTabView({ model, controller }) {
   const [draftQuestionSummary, setDraftQuestionSummary] = useState("");
   const [draftAuthorSolution, setDraftAuthorSolution] = useState("");
   const [draftIsSatisfied, setDraftIsSatisfied] = useState(true);
+  const [addingMessageId, setAddingMessageId] = useState(null);
   const messageListRef = useRef(null);
 
   const sessions = useMemo(() => {
@@ -194,6 +195,17 @@ function QaTabView({ model, controller }) {
       satisfactionNote: draftFeedback,
       isSatisfied: draftIsSatisfied,
     });
+  };
+
+  const handleAddMessageExperience = async (message) => {
+    const messageId = Number(message?.messageId || 0);
+    if (!messageId || model.isBusy || addingMessageId) return;
+    setAddingMessageId(messageId);
+    try {
+      await controller.onAddMessageExperience(message);
+    } finally {
+      setAddingMessageId(null);
+    }
   };
 
   if (isListMode || !activeSession) {
@@ -319,7 +331,21 @@ function QaTabView({ model, controller }) {
                   <div className={`qa-message-bubble ${isMine ? "mine" : "theirs"}`}>
                     <strong>{senderName}</strong>
                     <p>{message?.message || ""}</p>
-                    <small>{formatClock(message?.createdAt)}</small>
+                    <div className="qa-message-meta">
+                      <small>{formatClock(message?.createdAt)}</small>
+                      {model.isModerator && controller.onAddMessageExperience ? (
+                        <button
+                          type="button"
+                          className="qa-message-experience-btn"
+                          disabled={model.isBusy || Number(addingMessageId || 0) === Number(message?.messageId || 0)}
+                          onClick={() => handleAddMessageExperience(message)}
+                        >
+                          {Number(addingMessageId || 0) === Number(message?.messageId || 0)
+                            ? "Adding..."
+                            : "Add experience"}
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               );

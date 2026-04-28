@@ -19,6 +19,28 @@ const parseDocumentId = (id) => {
     return documentId;
 };
 
+const buildSafePdfFileName = (title) => {
+    const safeBaseName = String(title || 'document')
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\x20-\x7E]/g, '')
+        .replace(/[\\/:*?"<>|]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || 'document';
+
+    return `${safeBaseName}.pdf`;
+};
+
+const buildAttachmentDisposition = (title) => {
+    const asciiFileName = buildSafePdfFileName(title).replace(/"/g, '');
+    const utf8FileName = `${String(title || 'document')
+        .replace(/[\\/:*?"<>|]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || 'document'}.pdf`;
+
+    return `attachment; filename="${asciiFileName}"; filename*=UTF-8''${encodeURIComponent(utf8FileName)}`;
+};
+
 const buildGuestLockedOverlay = () => ({
     title: 'Bạn chưa đăng nhập',
     message: 'Bạn chưa đăng nhập, vui lòng đăng nhập hoặc đăng ký tài khoản.',
@@ -242,14 +264,17 @@ const registerDownload = async (req, res, next) => {
             document,
         });
 
-        if (!policy.canDownload) {
+        const hasRecentDownloadAccess = await documentAccessModel.hasRecentDownloadAccess({
+            userId: req.user.userId,
+            documentId,
+        });
+
+        if (!policy.canDownload && !hasRecentDownloadAccess) {
             const error = new Error(policy.reason || 'Download is locked for this account.');
             error.statusCode = 403;
             throw error;
         }
 
-        let remainingPoints = policy.points;
-        let chargedPoints = 0;
         const preparedViewer = await documentPreviewService.getPreparedDocumentViewer({
             documentId,
             fileUrl: document.fileUrl,
@@ -267,7 +292,72 @@ const registerDownload = async (req, res, next) => {
             throw error;
         }
 
-        if (policy.downloadCost && policy.downloadCost > 0) {
+        res.json({
+            success: true,
+            message: 'Download access granted. Open the protected download URL to receive the file.',
+            data: {
+                documentId,
+                documentTitle: document.title,
+                originalFileName: document.originalFileName,
+                fileUrl: `/api/documents/${documentId}/download/content`,
+                fileFormat: 'pdf',
+                suggestedFileName: buildSafePdfFileName(document.title),
+                chargedPoints: 0,
+                remainingPoints: policy.points,
+                willChargePoints: hasRecentDownloadAccess ? 0 : Number(policy.downloadCost || 0),
+                hasRecentDownloadAccess,
+                downloadConfirmation: policy.downloadConfirmation,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+const streamPreparedDownloadContent = async (req, res, next) => {
+    try {
+        const documentId = parseDocumentId(req.params.id);
+        const document = await documentAccessModel.getDocumentForAccess(documentId);
+        const policy = await documentAccessModel.buildAccessPolicy({
+            userId: req.user.userId,
+            role: req.user.role,
+            document,
+        });
+        const hasRecentDownloadAccess = await documentAccessModel.hasRecentDownloadAccess({
+            userId: req.user.userId,
+            documentId,
+        });
+
+        if (!policy.canDownload && !hasRecentDownloadAccess) {
+            const error = new Error(policy.reason || 'Download is locked for this account.');
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const viewerFile = await documentPreviewService.getPreparedDocumentViewerFile(documentId);
+
+        if (!viewerFile) {
+            await documentPreviewService.getPreparedDocumentViewer({
+                documentId,
+                fileUrl: document.fileUrl,
+                originalFileName: document.originalFileName,
+                mimeType: document.mimeType,
+                title: document.title,
+                forcePrepare: true,
+            });
+        }
+
+        const preparedViewerFile =
+            viewerFile || (await documentPreviewService.getPreparedDocumentViewerFile(documentId));
+
+        if (!preparedViewerFile) {
+            const error = new Error('Prepared download file is not available yet.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        let chargedPoints = 0;
+        let remainingPoints = policy.points;
+        if (!hasRecentDownloadAccess && policy.downloadCost && policy.downloadCost > 0) {
             remainingPoints = await documentAccessModel.chargeDownloadPoints({
                 userId: req.user.userId,
                 documentId,
@@ -284,31 +374,15 @@ const registerDownload = async (req, res, next) => {
             pointsCost: chargedPoints,
         });
 
-        const suggestedFileName = `${document.title || 'document'}`
-            .replace(/[\\/:*?"<>|]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim() || 'document';
-
-        res.json({
-            success: true,
-            message: 'Download access granted. Prepared PDF is ready.',
-            data: {
-                documentId,
-                documentTitle: document.title,
-                originalFileName: document.originalFileName,
-                fileUrl: preparedViewer.viewerUrl,
-                fileFormat: 'pdf',
-                suggestedFileName: `${suggestedFileName}.pdf`,
-                chargedPoints,
-                remainingPoints,
-                downloadConfirmation: chargedPoints > 0
-                    ? {
-                        accepted: true,
-                        message: `Đã trừ ${chargedPoints} điểm để tải tài liệu "${document.title}".`,
-                    }
-                    : null,
-            },
-        });
+        res.setHeader('Content-Type', preparedViewerFile.mimeType);
+        res.setHeader('Cache-Control', 'private, max-age=60');
+        res.setHeader('X-Download-Charged-Points', String(chargedPoints));
+        res.setHeader('X-Download-Remaining-Points', String(remainingPoints));
+        res.setHeader(
+            'Content-Disposition',
+            buildAttachmentDisposition(document.title)
+        );
+        res.sendFile(preparedViewerFile.absolutePath);
     } catch (error) {
         next(error);
     }
@@ -527,6 +601,7 @@ module.exports = {
     getDocumentAccessPolicy,
     registerFullView,
     registerDownload,
+    streamPreparedDownloadContent,
     streamPreparedViewerContent,
     getDocumentViewer,
     getPublicDocumentPreview,

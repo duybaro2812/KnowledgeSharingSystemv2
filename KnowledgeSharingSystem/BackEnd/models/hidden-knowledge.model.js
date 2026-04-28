@@ -194,22 +194,22 @@ const updateHiddenKnowledge = async ({
             `
                 UPDATE document_hidden_knowledge
                 SET
-                    title = COALESCE($3, title),
-                    content = COALESCE($4, content),
-                    status = COALESCE($5, status),
+                    title = COALESCE($3::VARCHAR(255), title),
+                    content = COALESCE($4::TEXT, content),
+                    status = COALESCE($5::VARCHAR(20), status),
                     updated_by_user_id = $2,
                     updated_at = NOW(),
                     published_by_user_id = CASE
-                        WHEN $5 = 'published' THEN $2
+                        WHEN $5::TEXT = 'published' THEN $2
                         ELSE published_by_user_id
                     END,
                     published_at = CASE
-                        WHEN $5 = 'published' THEN COALESCE(published_at, NOW())
-                        WHEN $5 IN ('draft', 'archived') THEN NULL
+                        WHEN $5::TEXT = 'published' THEN COALESCE(published_at, NOW())
+                        WHEN $5::TEXT IN ('draft', 'archived') THEN NULL
                         ELSE published_at
                     END,
-                    export_file_url = COALESCE($6, export_file_url),
-                    export_mime_type = COALESCE($7, export_mime_type)
+                    export_file_url = COALESCE($6::VARCHAR(500), export_file_url),
+                    export_mime_type = COALESCE($7::VARCHAR(100), export_mime_type)
                 WHERE document_id = $1
                 RETURNING knowledge_id AS "knowledgeId";
             `,
@@ -409,11 +409,11 @@ const addHiddenKnowledgeSource = async ({
                 SELECT source_id AS "sourceId"
                 FROM hidden_knowledge_sources
                 WHERE knowledge_id = $1
-                  AND source_type = $2
+                  AND source_type = $2::VARCHAR(30)
                   AND (
-                        ($2 = 'comment' AND comment_id = $3)
-                     OR ($2 = 'question_message' AND message_id = $3)
-                     OR ($2 = 'qa_rating_feedback' AND feedback_id = $3)
+                        ($2::TEXT = 'comment' AND comment_id = $3::INT)
+                     OR ($2::TEXT = 'question_message' AND message_id = $3::INT)
+                     OR ($2::TEXT = 'qa_rating_feedback' AND feedback_id = $3::INT)
                   )
                 LIMIT 1;
             `,
@@ -445,10 +445,10 @@ const addHiddenKnowledgeSource = async ({
                 VALUES (
                     $1,
                     $2,
-                    $3,
-                    CASE WHEN $3 = 'comment' THEN $4 ELSE NULL END,
-                    CASE WHEN $3 = 'question_message' THEN $4 ELSE NULL END,
-                    CASE WHEN $3 = 'qa_rating_feedback' THEN $4 ELSE NULL END,
+                    $3::VARCHAR(30),
+                    CASE WHEN $3::TEXT = 'comment' THEN $4::INT ELSE NULL::INT END,
+                    CASE WHEN $3::TEXT = 'question_message' THEN $4::INT ELSE NULL::INT END,
+                    CASE WHEN $3::TEXT = 'qa_rating_feedback' THEN $4::INT ELSE NULL::INT END,
                     $5,
                     $6,
                     $7

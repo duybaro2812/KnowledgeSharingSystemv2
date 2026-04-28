@@ -1143,6 +1143,8 @@ const resolveReportedDocument = async (req, res, next) => {
             throw error;
         }
 
+        const reporterUserIds = await reportModel.getOpenReporterUserIdsByDocument(documentId);
+
         if (action === 'unlock') {
             await documentModel.updateDocumentStatus({
                 documentId,

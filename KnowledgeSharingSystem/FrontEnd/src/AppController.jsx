@@ -293,6 +293,12 @@ function AppController() {
     setStatus("");
   };
 
+  const showStatusMessage = (message) => {
+    setError("");
+    setStatus("");
+    window.setTimeout(() => setStatus(message), 0);
+  };
+
   const requireAuthMessage = "Bạn chưa đăng nhập, vui lòng đăng nhập hoặc đăng ký tài khoản.";
 
   const getRecentReadStorageKey = (userId) => `neushare_recent_docs_${Number(userId || 0)}`;
@@ -448,15 +454,19 @@ function AppController() {
   };
 
   const refreshCurrentUser = async () => {
-    if (!token) return;
+    if (!token) return null;
     const payload = await apiRequest("/auth/me", { token });
     if (payload?.data) {
+      let nextUser = null;
       setUser((prev) => {
         const merged = { ...(prev || {}), ...payload.data };
+        nextUser = merged;
         localStorage.setItem("user", JSON.stringify(merged));
         return merged;
       });
+      return nextUser || payload.data;
     }
+    return null;
   };
 
   const call = async (fn, options = {}) => {
@@ -629,6 +639,7 @@ function AppController() {
         canFullView: Boolean(accessData.canFullView),
         canDownload: Boolean(accessData.canDownload),
         downloadCost: Number(accessData.downloadCost || 0),
+        downloadConfirmation: accessData.downloadConfirmation || null,
         points: Number(accessData.points ?? normalizedDoc.points ?? 0),
         tier: accessData.tier || normalizedDoc.tier || "",
         accessReason: accessData.reason || "",
@@ -1583,6 +1594,9 @@ function AppController() {
     const isLoginSuccess = normalizedStatus === "login successful.";
     const isGenericSuccess =
       normalizedStatus.includes("successful") ||
+      normalizedStatus.includes("thành công") ||
+      normalizedStatus.includes("tai xuong") ||
+      normalizedStatus.includes("tải xuống") ||
       normalizedStatus.includes("submitted") ||
       normalizedStatus.includes("closed") ||
       normalizedStatus.includes("started");
@@ -2032,19 +2046,29 @@ function AppController() {
     });
   };
 
+  const addQaMessageToHiddenKnowledge = async (message) => {
+    const documentId = Number(activeQaSession?.documentId || message?.documentId || 0);
+    const messageId = Number(message?.messageId || 0);
+    if (!Number.isInteger(messageId) || messageId <= 0) {
+      throw new Error("A valid Q&A message id is required.");
+    }
+    if (!Number.isInteger(documentId) || documentId <= 0) {
+      throw new Error("A valid document id is required.");
+    }
+
+    return addHiddenKnowledgeSource({
+      documentId,
+      sourceType: "question_message",
+      sourceId: messageId,
+      extractedText: message?.message || "",
+    });
+  };
+
   const downloadPreviewDocument = async (documentId, previewDocState) => {
     const numericId = Number(documentId || 0);
     if (!token || !Number.isInteger(numericId) || numericId <= 0) return;
 
-    await call(async () => {
-      const downloadCost = Number(previewDocState?.downloadCost || 0);
-      if (downloadCost > 0) {
-        const accepted = window.confirm(
-          `Tải tài liệu này sẽ tốn ${downloadCost} điểm. Bạn có muốn tiếp tục không?`,
-        );
-        if (!accepted) return;
-      }
-
+    return call(async () => {
       const payload = await apiRequest(`/documents/${numericId}/download`, {
         method: "POST",
         token,
@@ -2053,28 +2077,35 @@ function AppController() {
       if (nextFileUrl) {
         window.open(nextFileUrl, "_blank", "noopener,noreferrer");
       }
-      await refreshCurrentUser();
+      const refreshedUser = await refreshCurrentUser();
+      if (refreshedUser && Number.isFinite(Number(refreshedUser.points))) {
+        setPreviewDoc((prev) =>
+          prev && Number(prev.documentId || 0) === numericId
+            ? {
+                ...prev,
+                points: Number(refreshedUser.points),
+                accessState: "download_unlocked",
+                tier: "download_unlocked",
+                isLockedForPoints: false,
+                canFullView: true,
+                canDownload: true,
+                dailyViewLimit: null,
+                viewsRemainingToday: null,
+                downloadCost: 0,
+                downloadConfirmation: null,
+                lockedOverlay: null,
+              }
+            : prev,
+        );
+      }
+      showStatusMessage("Tài liệu đã được tải xuống thành công. Điểm của bạn đã được cập nhật.");
     }, { actionKey: `doc:download:${numericId}` });
   };
-
   const downloadPreviewDocumentWithPolicyCheck = async (documentId, previewDocState) => {
     const numericId = Number(documentId || 0);
     if (!token || !Number.isInteger(numericId) || numericId <= 0) return;
 
-    await call(async () => {
-      const accessPayload = await apiRequest(`/documents/${numericId}/access`, { token });
-      const accessInfo = accessPayload?.data || {};
-      const downloadCost = Number(
-        accessInfo?.downloadCost ?? accessInfo?.policy?.downloadCost ?? previewDocState?.downloadCost ?? 0,
-      );
-
-      if (downloadCost > 0) {
-        const accepted = window.confirm(
-          `Tai tai lieu nay se ton ${downloadCost} diem. Ban co muon tiep tuc khong?`,
-        );
-        if (!accepted) return;
-      }
-
+    return call(async () => {
       const payload = await apiRequest(`/documents/${numericId}/download`, {
         method: "POST",
         token,
@@ -2084,8 +2115,9 @@ function AppController() {
       const downloadFileName =
         suggestedFileName || `${String(previewDocState?.title || "document").trim() || "document"}.pdf`;
 
-      // Download through protected backend viewer endpoint to avoid Cloudinary 401/public-link issues.
-      const viewerContentUrl = `${API_BASE_URL}/documents/${numericId}/viewer/content`;
+      // Download through a dedicated protected endpoint so a paid download remains valid
+      // even if the point deduction moves the user below the read threshold.
+      const viewerContentUrl = `${API_BASE_URL}/documents/${numericId}/download/content`;
       const viewerResponse = await fetch(viewerContentUrl, {
         method: "GET",
         headers: {
@@ -2113,7 +2145,28 @@ function AppController() {
         setStatus("Tai lieu dang duoc tra ve dinh dang goc. Vui long kiem tra pipeline convert PDF tren backend.");
       }
 
-      await refreshCurrentUser();
+      const refreshedUser = await refreshCurrentUser();
+      const nextPoints = Number(refreshedUser?.points);
+      if (Number.isFinite(nextPoints)) {
+        setPreviewDoc((prev) => {
+          if (!prev || Number(prev.documentId || 0) !== numericId) return prev;
+          return {
+            ...prev,
+            points: nextPoints,
+            accessState: "download_unlocked",
+            tier: "download_unlocked",
+            isLockedForPoints: false,
+            canFullView: true,
+            canDownload: true,
+            dailyViewLimit: null,
+            viewsRemainingToday: null,
+            downloadCost: 0,
+            downloadConfirmation: null,
+            lockedOverlay: null,
+          };
+        });
+      }
+      showStatusMessage("Tài liệu đã được tải xuống thành công. Điểm của bạn đã được cập nhật.");
     }, { actionKey: `doc:download-protected:${numericId}` });
   };
 
@@ -2407,6 +2460,7 @@ function AppController() {
     onSaveHiddenKnowledge: saveHiddenKnowledgeForPreview,
     onAddHiddenKnowledgeFromComment: addCommentToHiddenKnowledge,
     onAddHiddenKnowledgeFromQaRating: addQaRatingToHiddenKnowledge,
+    onAddHiddenKnowledgeFromQaMessage: addQaMessageToHiddenKnowledge,
     getDocReactionCounts,
     toggleLike,
     toggleDislike,

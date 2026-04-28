@@ -44,18 +44,18 @@ const createPointEvent = async ({
                     SELECT pe.event_id AS "eventId", pe.status
                     FROM point_events pe
                     WHERE pe.user_id = $1
-                      AND pe.event_type = $2
+                      AND pe.event_type = $2::VARCHAR(50)
                       AND (
-                            ($2 IN ('upload_submitted', 'upload_approved')
+                            ($2::TEXT IN ('upload_submitted', 'upload_approved')
                                 AND $4::INT IS NOT NULL
                                 AND pe.document_id = $4)
-                         OR ($2 IN ('comment_given', 'comment_received')
+                         OR ($2::TEXT IN ('comment_given', 'comment_received')
                                 AND $5::INT IS NOT NULL
                                 AND pe.comment_id = $5)
-                         OR ($2 = 'qa_session_rated'
+                         OR ($2::TEXT = 'qa_session_rated'
                                 AND $6::INT IS NOT NULL
                                 AND pe.qa_session_id = $6)
-                         OR ($2 IN ('upvote_received', 'document_saved_by_other')
+                         OR ($2::TEXT IN ('upvote_received', 'document_saved_by_other')
                                 AND $4::INT IS NOT NULL
                                 AND $7::INT IS NOT NULL
                                 AND pe.document_id = $4
@@ -76,7 +76,7 @@ const createPointEvent = async ({
                         source_user_id,
                         metadata
                     )
-                    SELECT $1, $2, $3, 'pending', $4, $5, $6, $7, $8
+                    SELECT $1, $2::VARCHAR(50), $3, 'pending', $4, $5, $6, $7, $8
                     WHERE NOT EXISTS (SELECT 1 FROM existing)
                     RETURNING event_id AS "eventId", status
                 )
@@ -335,11 +335,11 @@ const reviewPointEvent = async ({
                 `
                     UPDATE point_events
                     SET
-                        status = $2,
+                        status = $2::VARCHAR(20),
                         reviewed_by_user_id = $3,
                         review_note = $4,
                         points = CASE
-                            WHEN $2 = 'approved' AND $5::INT IS NOT NULL THEN $5
+                            WHEN $2::TEXT = 'approved' AND $5::INT IS NOT NULL THEN $5::INT
                             ELSE points
                         END,
                         reviewed_at = NOW()

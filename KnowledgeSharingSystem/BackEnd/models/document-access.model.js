@@ -125,6 +125,106 @@ const getTodayFullViewCount = async (userId) => {
     return Number(result.recordset[0]?.total || 0);
 };
 
+const hasRecentDownloadAccess = async ({ userId, documentId, windowMinutes = 15 }) => {
+    const pool = getPool();
+    const safeWindowMinutes = Number.isInteger(Number(windowMinutes)) && Number(windowMinutes) > 0
+        ? Number(windowMinutes)
+        : 15;
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM document_access_logs
+                    WHERE viewer_user_id = $1
+                      AND document_id = $2
+                      AND access_type = 'download'
+                      AND points_cost > 0
+                      AND created_at >= NOW() - ($3::INT * INTERVAL '1 minute')
+                ) AS "hasAccess";
+            `,
+            [userId, documentId, safeWindowMinutes]
+        );
+
+        return Boolean(result.rows[0]?.hasAccess);
+    }
+
+    const result = await pool
+        .request()
+        .input('viewerUserId', sql.Int, userId)
+        .input('documentId', sql.Int, documentId)
+        .input('windowMinutes', sql.Int, safeWindowMinutes)
+        .query(`
+            SELECT
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM dbo.DocumentAccessLogs
+                    WHERE viewerUserId = @viewerUserId
+                      AND documentId = @documentId
+                      AND accessType = N'download'
+                      AND pointsCost > 0
+                      AND createdAt >= DATEADD(MINUTE, -@windowMinutes, SYSDATETIME())
+                ) THEN 1 ELSE 0 END AS hasAccess;
+        `);
+
+    return Boolean(result.recordset[0]?.hasAccess);
+};
+
+const hasDownloadedDocumentAccess = async ({ userId, documentId }) => {
+    const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM document_access_logs
+                    WHERE viewer_user_id = $1
+                      AND document_id = $2
+                      AND access_type = 'download'
+                      AND points_cost > 0
+                    UNION ALL
+                    SELECT 1
+                    FROM point_transactions
+                    WHERE user_id = $1
+                      AND document_id = $2
+                      AND transaction_type = 'download_cost'
+                      AND points < 0
+                ) AS "hasAccess";
+            `,
+            [userId, documentId]
+        );
+
+        return Boolean(result.rows[0]?.hasAccess);
+    }
+
+    const result = await pool
+        .request()
+        .input('viewerUserId', sql.Int, userId)
+        .input('documentId', sql.Int, documentId)
+        .query(`
+            SELECT
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM dbo.DocumentAccessLogs
+                    WHERE viewerUserId = @viewerUserId
+                      AND documentId = @documentId
+                      AND accessType = N'download'
+                      AND pointsCost > 0
+                    UNION ALL
+                    SELECT 1
+                    FROM dbo.PointTransactions
+                    WHERE userId = @viewerUserId
+                      AND documentId = @documentId
+                      AND transactionType = N'download_cost'
+                      AND points < 0
+                ) THEN 1 ELSE 0 END AS hasAccess;
+        `);
+
+    return Boolean(result.recordset[0]?.hasAccess);
+};
+
 const createAccessLog = async ({ documentId, viewerUserId, accessType, pointsCost = 0 }) => {
     const pool = getPool();
 
@@ -345,6 +445,33 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
 
     const points = await getUserPoints(userId);
     const todayFullViewCount = await getTodayFullViewCount(userId);
+    const hasDownloadedAccess = await hasDownloadedDocumentAccess({
+        userId,
+        documentId: document.documentId,
+    });
+
+    if (hasDownloadedAccess) {
+        return {
+            points,
+            accessState: 'download_unlocked',
+            isLocked: false,
+            canPreview: true,
+            canFullView: true,
+            canDownload: true,
+            canComment: true,
+            canDiscuss: true,
+            canAskQuestion: true,
+            dailyViewLimit: null,
+            todayFullViewCount,
+            viewsRemainingToday: null,
+            previewPageLimit: null,
+            downloadCost: 0,
+            downloadConfirmation: null,
+            lockedOverlay: null,
+            tier: 'download_unlocked',
+            reason: 'Document unlocked by previous paid download.',
+        };
+    }
 
     if (points < POINT_POLICY.unlock.previewThreshold) {
         return {
@@ -436,6 +563,8 @@ module.exports = {
     getDocumentForAccess,
     getUserPoints,
     getTodayFullViewCount,
+    hasRecentDownloadAccess,
+    hasDownloadedDocumentAccess,
     createAccessLog,
     chargeDownloadPoints,
     buildAccessPolicy,

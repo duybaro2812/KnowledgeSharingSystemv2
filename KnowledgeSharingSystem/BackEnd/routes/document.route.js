@@ -118,6 +118,7 @@ router.get('/:id/viewer', authMiddleware, documentAccessController.getDocumentVi
 router.get('/:id/viewer/content', authMiddleware, documentAccessController.streamPreparedViewerContent);
 router.post('/:id/view', authMiddleware, documentAccessController.registerFullView);
 router.post('/:id/download', authMiddleware, documentAccessController.registerDownload);
+router.get('/:id/download/content', authMiddleware, documentAccessController.streamPreparedDownloadContent);
 router.get('/:id', documentController.getDocumentDetail);
 router.post(
     '/',

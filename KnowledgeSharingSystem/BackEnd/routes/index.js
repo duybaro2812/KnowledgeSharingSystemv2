@@ -83,6 +83,7 @@ router.use((req, res, next) => {
         { method: 'GET', test: (path) => /^\/documents\/\d+\/viewer\/content$/.test(path) },
         { method: 'POST', test: (path) => /^\/documents\/\d+\/view$/.test(path) },
         { method: 'POST', test: (path) => /^\/documents\/\d+\/download$/.test(path) },
+        { method: 'GET', test: (path) => /^\/documents\/\d+\/download\/content$/.test(path) },
         { method: 'POST', test: (path) => path === '/documents' },
         { method: 'PUT', test: (path) => /^\/documents\/\d+$/.test(path) },
         { method: 'GET', test: (path) => /^\/documents\/\d+\/duplicate-candidates$/.test(path) },

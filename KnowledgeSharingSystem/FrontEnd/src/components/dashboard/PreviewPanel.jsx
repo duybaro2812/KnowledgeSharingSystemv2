@@ -1,7 +1,13 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const PDFJS_MODULE_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.min.mjs";
 const PDFJS_WORKER_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.worker.min.mjs";
+
+function ModalPortal({ children }) {
+  if (typeof document === "undefined") return children;
+  return createPortal(children, document.body);
+}
 
 function LimitedPdfPreview({ fileUrl, pageLimit = 5, totalPages = null, lockOverlayContent = null }) {
   const hostRef = useRef(null);
@@ -213,7 +219,33 @@ function PreviewPanel(props) {
   const [isLoadingHiddenKnowledge, setIsLoadingHiddenKnowledge] = useState(false);
   const [isSavingHiddenKnowledge, setIsSavingHiddenKnowledge] = useState(false);
   const [addingKnowledgeCommentId, setAddingKnowledgeCommentId] = useState(null);
+  const [isDownloadConfirmOpen, setIsDownloadConfirmOpen] = useState(false);
+  const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
+  const [isDownloadSuccessOpen, setIsDownloadSuccessOpen] = useState(false);
+  const [downloadSuccessMessage, setDownloadSuccessMessage] = useState("");
   const previewFrameWrapRef = useRef(null);
+  const currentPreviewDocId = Number(previewDoc?.documentId || 0);
+
+  useEffect(() => {
+    setDownloadSuccessMessage("");
+    setIsDownloadSuccessOpen(false);
+  }, [currentPreviewDocId]);
+
+  const isDownloadModalOpen = isDownloadConfirmOpen || isDownloadSuccessOpen;
+
+  useEffect(() => {
+    if (!isDownloadModalOpen || typeof document === "undefined") return undefined;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [isDownloadModalOpen]);
 
   if (!previewDoc) return null;
 
@@ -269,15 +301,22 @@ function PreviewPanel(props) {
   const tier = String(previewDoc.tier || "").toLowerCase();
   const isPrivilegedState = accessState === "privileged" || tier === "privileged";
   const isFullState = accessState === "full_access" || tier === "full_access";
+  const isDownloadUnlockedState =
+    accessState === "download_unlocked" || tier === "download_unlocked";
   const isLimitedState = accessState === "limited_full" || tier === "view_limited";
-  const hasFullAccess = !isLocked && (Boolean(previewDoc.canFullView) || isPrivilegedState || isFullState);
-  const lockedOverlayTitle = previewDoc.lockedOverlay?.title || "This document is locked";
+  const hasFullAccess =
+    !isLocked &&
+    (Boolean(previewDoc.canFullView) || isPrivilegedState || isFullState || isDownloadUnlockedState);
+  const lockedOverlayTitle =
+    previewDoc.lockedOverlay?.title === "This document is locked"
+      ? "Tài liệu này đang bị khóa"
+      : previewDoc.lockedOverlay?.title || "Tài liệu này đang bị khóa";
   const lockedOverlayMessage =
     previewDoc.lockedOverlay?.message ||
-    `You need at least ${previewDoc.requiredPoints} points to unlock this document.`;
+    `Bạn cần ít nhất ${previewDoc.requiredPoints} điểm để mở khóa tài liệu này.`;
   const lockedOverlayHelper =
     previewDoc.lockedOverlay?.helperText ||
-    "You can still discuss, comment, reply, and ask the owner questions.";
+    "Bạn vẫn có thể thảo luận, bình luận, trả lời và đặt câu hỏi cho chủ sở hữu tài liệu.";
   const isGuestLockedState =
     accessState === "guest_locked" ||
     tier === "guest_locked";
@@ -316,6 +355,14 @@ function PreviewPanel(props) {
     previewDoc.dailyViewLimit !== null &&
     previewDoc.dailyViewLimit !== undefined &&
     Number(previewDoc.dailyViewLimit) > 0;
+  const effectiveDownloadCost = Number(
+    previewDoc.downloadConfirmation?.pointsCost ?? previewDoc.downloadCost ?? 0,
+  );
+  const effectivePointsAfterDownload = Number.isFinite(
+    Number(previewDoc.downloadConfirmation?.pointsAfterIfConfirmed),
+  )
+    ? Number(previewDoc.downloadConfirmation.pointsAfterIfConfirmed)
+    : Math.max(0, Number(previewDoc.points || 0) - effectiveDownloadCost);
 
   const openReportModal = () => {
     setReportReason("");
@@ -345,6 +392,38 @@ function PreviewPanel(props) {
 
   const closeEarnPointsModal = () => {
     setIsEarnPointsOpen(false);
+  };
+
+  const openDownloadConfirm = () => {
+    if (!onDownload || !previewDoc.canDownload || isLoading || isBusy || isSubmittingDownload) return;
+    setIsDownloadConfirmOpen(true);
+  };
+
+  const closeDownloadConfirm = () => {
+    if (isSubmittingDownload) return;
+    setIsDownloadConfirmOpen(false);
+  };
+
+  const handleConfirmDownload = async () => {
+    if (!onDownload || isSubmittingDownload || isBusy) return;
+    setIsSubmittingDownload(true);
+    try {
+      const result = await onDownload(docId, previewDoc);
+      if (result !== false) {
+        setDownloadSuccessMessage(
+          "Tài liệu đã được tải xuống thành công. Nhấn xác nhận để tải lại trang và cập nhật điểm.",
+        );
+        setIsDownloadSuccessOpen(true);
+      }
+      setIsDownloadConfirmOpen(false);
+    } finally {
+      setIsSubmittingDownload(false);
+    }
+  };
+
+  const confirmDownloadSuccessReload = () => {
+    setIsDownloadSuccessOpen(false);
+    window.location.reload();
   };
 
   const hydrateHiddenKnowledgeDraft = (data) => {
@@ -515,11 +594,11 @@ function PreviewPanel(props) {
 
   const lockOverlayContent = (
     <>
-      <h3>Locked: {lockedOverlayTitle}</h3>
+      <h3>Đã khóa: {lockedOverlayTitle}</h3>
       <p>{lockedOverlayMessage}</p>
       <small>
         {canRenderLimitedPdf
-          ? `You can preview the first ${previewPageLimit} pages. ${lockedOverlayHelper}`
+          ? `Bạn có thể xem trước ${previewPageLimit} trang đầu. ${lockedOverlayHelper}`
           : lockedOverlayHelper}
       </small>
       <div className="lock-overlay-actions">
@@ -536,11 +615,11 @@ function PreviewPanel(props) {
           <>
             {canAskAuthor && (
               <button type="button" onClick={handleOpenAskAuthor}>
-                Ask author
+                Hỏi tác giả
               </button>
             )}
             <button type="button" className="preview-earn-btn" onClick={handleOpenEarnPoints}>
-              Earn points
+              Kiếm điểm
             </button>
           </>
         )}
@@ -691,8 +770,8 @@ function PreviewPanel(props) {
             <span>Download</span>
             <b>
               {previewDoc.canDownload
-                ? previewDoc.downloadCost > 0
-                  ? `${previewDoc.downloadCost} pts`
+                ? effectiveDownloadCost > 0
+                  ? `${effectiveDownloadCost} pts`
                   : "Enabled"
                 : "Locked"}
             </b>
@@ -714,19 +793,21 @@ function PreviewPanel(props) {
             <button
               type="button"
               className="preview-cta"
-              disabled={!previewDoc.canDownload || isLoading || isBusy}
-              onClick={() => onDownload && onDownload(docId, previewDoc)}
+              disabled={!previewDoc.canDownload || isLoading || isBusy || isSubmittingDownload}
+              onClick={openDownloadConfirm}
               title={
                 previewDoc.canDownload
-                  ? previewDoc.downloadCost > 0
-                    ? `Download cost: ${previewDoc.downloadCost} points`
+                  ? effectiveDownloadCost > 0
+                    ? `Download cost: ${effectiveDownloadCost} points`
                     : "Download document"
                   : "Download is locked for your current point tier"
               }
             >
-              {previewDoc.canDownload
-                ? previewDoc.downloadCost > 0
-                  ? `Download (${previewDoc.downloadCost} pts)`
+              {isSubmittingDownload
+                ? "Downloading..."
+                : previewDoc.canDownload
+                ? effectiveDownloadCost > 0
+                  ? `Download (${effectiveDownloadCost} pts)`
                   : "Download"
                 : "Download locked"}
             </button>
@@ -868,6 +949,94 @@ function PreviewPanel(props) {
             </div>
           </div>
         </div>
+      )}
+
+      {isDownloadConfirmOpen && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal download-confirm-modal">
+              <div className="report-modal-head download-confirm-head">
+                <div>
+                  <h3>Xác nhận tải tài liệu</h3>
+                  <p className="report-modal-sub">NeuShare sẽ trừ điểm khi file bắt đầu tải xuống.</p>
+                </div>
+                <button type="button" className="report-close-btn" onClick={closeDownloadConfirm}>
+                  x
+                </button>
+              </div>
+
+              <div className="download-confirm-summary">
+                <div>
+                  <span>Tài liệu</span>
+                  <strong>{previewDoc.title || "Document"}</strong>
+                </div>
+                <div>
+                  <span>Điểm hiện tại</span>
+                  <strong>{Number(previewDoc.points || 0)} pts</strong>
+                </div>
+                <div>
+                  <span>Phí tải xuống</span>
+                  <strong>{effectiveDownloadCost} pts</strong>
+                </div>
+                <div>
+                  <span>Sau khi tải</span>
+                  <strong>{effectivePointsAfterDownload} pts</strong>
+                </div>
+              </div>
+
+              <p className="download-confirm-note">
+                Bạn có chắc chắn muốn tải tài liệu này không?
+              </p>
+
+              <div className="report-modal-actions download-confirm-actions">
+                <button type="button" onClick={closeDownloadConfirm} disabled={isSubmittingDownload}>
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  disabled={isSubmittingDownload || isBusy}
+                  onClick={handleConfirmDownload}
+                >
+                  {isSubmittingDownload ? "Đang tải..." : "Đồng ý tải xuống"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {isDownloadSuccessOpen && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal download-confirm-modal download-success-modal">
+              <div className="report-modal-head download-confirm-head">
+                <div>
+                  <h3>Tải xuống thành công</h3>
+                  <p className="report-modal-sub">NeuShare sẽ tải lại trang để cập nhật điểm mới.</p>
+                </div>
+              </div>
+
+              <div className="download-success-body">
+                <div className="download-success-icon" aria-hidden="true">✓</div>
+                <div>
+                  <strong>{previewDoc.title || "Tài liệu"}</strong>
+                  <p>{downloadSuccessMessage}</p>
+                </div>
+              </div>
+
+              <div className="report-modal-actions download-confirm-actions">
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={confirmDownloadSuccessReload}
+                >
+                  Xác nhận
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
       )}
 
       {isQaOpen && (
@@ -1050,5 +1219,7 @@ function PreviewPanel(props) {
 }
 
 export default PreviewPanel;
+
+
 
 
