@@ -106,6 +106,8 @@ router.use((req, res, next) => {
         },
         { method: 'PATCH', test: (path) => /^\/comments\/\d+\/review$/.test(path) },
         { method: 'PATCH', test: (path) => /^\/comments\/\d+\/hide$/.test(path) },
+        { method: 'PATCH', test: (path) => /^\/comments\/\d+\/restore$/.test(path) },
+        { method: 'DELETE', test: (path) => /^\/comments\/\d+\/moderation$/.test(path) },
         {
             method: 'POST',
             test: (path) => /^\/comments\/\d+\/point-events\/ensure$/.test(path),
@@ -120,6 +122,8 @@ router.use((req, res, next) => {
         { method: 'GET', test: (path) => path === '/points/me/transactions' },
         { method: 'GET', test: (path) => path === '/points/me/events' },
         { method: 'GET', test: (path) => path === '/points/events/pending' },
+        { method: 'GET', test: (path) => path === '/points/events/qa-ratings/reviewed' },
+        { method: 'DELETE', test: (path) => /^\/points\/events\/qa-ratings\/\d+$/.test(path) },
         { method: 'PATCH', test: (path) => /^\/points\/events\/\d+\/review$/.test(path) },
         { method: 'GET', test: (path) => path === '/moderation/stats' },
         { method: 'GET', test: (path) => path === '/moderation/timeline' },

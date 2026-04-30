@@ -139,10 +139,13 @@ function DashboardShell(props) {
               onReport={onReportFromPreview}
               onStartQa={onStartQaFromPreview}
               comments={previewComments}
+              focusCommentId={props.moderationFocus?.commentId}
               onCreateComment={createCommentForPreview}
               onCreateReply={createReplyForPreview}
               onReviewCommentPoint={props.onReviewCommentPointFromPreview}
               onHideComment={props.onHideCommentFromPreview}
+              onRestoreComment={props.onRestoreCommentFromPreview}
+              onDeleteHiddenComment={props.onDeleteHiddenCommentFromPreview}
               onOpenHiddenKnowledge={props.onOpenHiddenKnowledge}
               onSaveHiddenKnowledge={props.onSaveHiddenKnowledge}
               onAddHiddenKnowledgeFromComment={props.onAddHiddenKnowledgeFromComment}

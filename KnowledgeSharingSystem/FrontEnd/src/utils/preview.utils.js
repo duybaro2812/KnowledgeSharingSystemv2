@@ -46,16 +46,57 @@ export const buildPreviewUrl = ({ fileUrl, mimeType, originalFileName }) => {
   return { url: resolved, reason: "", fallbackUrls: [] };
 };
 
+const MIME_EXTENSION_BY_TYPE = {
+  "application/pdf": ".pdf",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "text/plain": ".txt",
+};
+
+export const buildDisplayFileName = ({ title, originalFileName, mimeType }) => {
+  const original = String(originalFileName || "").trim();
+  const explicitExtensionMatch = original.match(/\.[A-Za-z0-9]{1,8}$/);
+  const extension =
+    explicitExtensionMatch?.[0]?.toLowerCase() ||
+    MIME_EXTENSION_BY_TYPE[String(mimeType || "").toLowerCase()] ||
+    "";
+  const safeBaseName =
+    String(title || original || "document")
+      .replace(/[\\/:*?"<>|]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "document";
+
+  if (extension && safeBaseName.toLowerCase().endsWith(extension)) {
+    return safeBaseName;
+  }
+
+  return `${safeBaseName}${extension}`;
+};
+
 export const createOpenPreview = (setPreviewDoc) => (doc) => {
   const preview = buildPreviewUrl(doc?.viewer?.viewerUrl ? { ...doc, fileUrl: doc.viewer.viewerUrl } : doc);
   const isLockedForPoints = !!doc.isLockedForPoints;
   const previewUrl = doc.securePreviewUrl || (isLockedForPoints && !doc?.viewer?.viewerUrl ? "" : preview.url);
+  const displayFileName =
+    doc.downloadFileName ||
+    doc.suggestedFileName ||
+    buildDisplayFileName({
+      title: doc.title,
+      originalFileName: doc.originalFileName,
+      mimeType: doc.mimeType,
+    });
   setPreviewDoc({
     documentId: doc.documentId,
     title: doc.title,
     ownerName: doc.ownerName || doc.authorName || doc.uploadedByName || "NeuShare member",
     ownerUserId: doc.ownerUserId || doc.ownerId || doc.uploadedByUserId || doc.userId || null,
     originalFileName: doc.originalFileName,
+    displayFileName,
+    downloadFileName: displayFileName,
     fileUrl: resolveFileUrl(doc.fileUrl),
     previewUrl,
     fallbackPreviewUrls: preview.fallbackUrls || [],

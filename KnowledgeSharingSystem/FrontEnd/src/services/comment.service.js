@@ -83,6 +83,35 @@ export function createCommentFeature(ctx) {
     });
   };
 
+  const restoreCommentForModeration = async (commentId, documentIdForRefresh = null) => {
+    await call(async () => {
+      const payload = await apiRequest(`/comments/${commentId}/restore`, {
+        method: "PATCH",
+        token,
+      });
+      setStatus(payload.message || "Comment restored successfully.");
+      await loadPendingCommentsForModeration();
+      if (documentIdForRefresh) {
+        await loadCommentsByDocument(documentIdForRefresh);
+      }
+    });
+  };
+
+  const deleteHiddenCommentForModeration = async (commentId, body, documentIdForRefresh = null) => {
+    await call(async () => {
+      const payload = await apiRequest(`/comments/${commentId}/moderation`, {
+        method: "DELETE",
+        token,
+        body,
+      });
+      setStatus(payload.message || "Comment deleted successfully.");
+      await loadPendingCommentsForModeration();
+      if (documentIdForRefresh) {
+        await loadCommentsByDocument(documentIdForRefresh);
+      }
+    });
+  };
+
   return {
     loadCommentsByDocument,
     createComment,
@@ -90,5 +119,7 @@ export function createCommentFeature(ctx) {
     loadPendingCommentsForModeration,
     reviewPendingComment,
     hideCommentForModeration,
+    restoreCommentForModeration,
+    deleteHiddenCommentForModeration,
   };
 }

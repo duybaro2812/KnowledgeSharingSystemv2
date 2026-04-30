@@ -27,6 +27,18 @@ router.patch(
     roleMiddleware('admin', 'moderator'),
     commentController.hideComment
 );
+router.patch(
+    '/comments/:id/restore',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    commentController.restoreHiddenComment
+);
+router.delete(
+    '/comments/:id/moderation',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    commentController.deleteHiddenCommentForModeration
+);
 router.post(
     '/comments/:id/point-events/ensure',
     authMiddleware,

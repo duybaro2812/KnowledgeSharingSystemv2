@@ -37,6 +37,20 @@ router.get(
     pointEventController.getPendingPointEvents
 );
 
+router.get(
+    '/events/qa-ratings/reviewed',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    pointEventController.getReviewedQaRatingEvents
+);
+
+router.delete(
+    '/events/qa-ratings/:eventId',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    pointEventController.deleteQaRatingEvent
+);
+
 router.patch(
     '/events/:eventId/review',
     authMiddleware,

@@ -25,16 +25,35 @@ const normalizeStatus = (value) => String(value || "").trim().toLowerCase();
 
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
+const EVENT_BACKED_TRANSACTION_TYPES = new Set([
+  "answer_reward",
+  "comment_reward",
+  "hidden_knowledge_reward",
+  "moderation_reward",
+  "qa_rating_reward",
+  "upload_reward",
+  "upvote_reward",
+]);
+
+const EVENT_TYPES_BY_TRANSACTION_TYPE = {
+  answer_reward: new Set(["answer_accepted"]),
+  comment_reward: new Set(["comment_given", "comment_received"]),
+  hidden_knowledge_reward: new Set(["hidden_knowledge_contribution"]),
+  qa_rating_reward: new Set(["qa_session_rated"]),
+  upload_reward: new Set(["upload_submitted", "upload_approved"]),
+  upvote_reward: new Set(["upvote_received"]),
+};
+
 const composeModeratorDescription = (item) => {
   const note = normalizeText(item?.reviewNote || "");
   const moderator = normalizeText(item?.reviewedByName || "");
   const documentTitle = normalizeText(item?.documentTitle || "");
 
   if (note && documentTitle && moderator) {
-    return `${note} — ${documentTitle} (Moderator: ${moderator})`;
+    return `${note} - ${documentTitle} (Moderator: ${moderator})`;
   }
   if (note && documentTitle) {
-    return `${note} — ${documentTitle}`;
+    return `${note} - ${documentTitle}`;
   }
   if (note) return note;
   if (documentTitle) return `Reviewed document: ${documentTitle}`;
@@ -42,12 +61,25 @@ const composeModeratorDescription = (item) => {
 };
 
 const composeTransactionDescription = (tx, relatedEvent) => {
-  const eventDescription = composeModeratorDescription(relatedEvent || {});
-  if (eventDescription) return eventDescription;
-
+  const transactionType = normalizeStatus(tx?.transactionType || "");
   const txDescription = normalizeText(tx?.description || "");
   const documentTitle = normalizeText(tx?.documentTitle || "");
-  if (txDescription && documentTitle) return `${txDescription} — ${documentTitle}`;
+  const isEventBackedTransaction = EVENT_BACKED_TRANSACTION_TYPES.has(transactionType);
+
+  if (isEventBackedTransaction) {
+    const eventDescription = composeModeratorDescription(relatedEvent || {});
+    if (eventDescription) return eventDescription;
+  }
+
+  if (transactionType === "penalty" && txDescription) {
+    const readablePenalty = txDescription.replace(
+      /^Penalty for deleted comment #(\d+):\s*/i,
+      "Xoa binh luan #$1: ",
+    );
+    return documentTitle ? `${readablePenalty} - ${documentTitle}` : readablePenalty;
+  }
+
+  if (txDescription && documentTitle) return `${txDescription} - ${documentTitle}`;
   if (txDescription) return txDescription;
   if (documentTitle) return `Point transaction for document: ${documentTitle}`;
   return normalizeText(tx?.transactionType || "Transaction");
@@ -102,13 +134,18 @@ function PointsTabView(props) {
     (item) => normalizeStatus(item?.status) !== "pending",
   );
 
-  const latestReviewedEventByDocumentId = new Map();
+  const latestReviewedEventByTransactionKey = new Map();
   reviewedEvents.forEach((item) => {
     const documentId = Number(item?.documentId || 0);
     if (!Number.isInteger(documentId) || documentId <= 0) return;
-    if (!latestReviewedEventByDocumentId.has(documentId)) {
-      latestReviewedEventByDocumentId.set(documentId, item);
-    }
+    const eventType = normalizeStatus(item?.eventType || "");
+    Object.entries(EVENT_TYPES_BY_TRANSACTION_TYPE).forEach(([transactionType, eventTypes]) => {
+      if (!eventTypes.has(eventType)) return;
+      const key = `${transactionType}:${documentId}`;
+      if (!latestReviewedEventByTransactionKey.has(key)) {
+        latestReviewedEventByTransactionKey.set(key, item);
+      }
+    });
   });
 
   const mergedHistory = [
@@ -122,7 +159,10 @@ function PointsTabView(props) {
       documentTitle: item.documentTitle || "",
     })),
     ...(Array.isArray(model.transactions) ? model.transactions : []).map((item) => ({
-      relatedEvent: latestReviewedEventByDocumentId.get(Number(item?.documentId || 0)) || null,
+      relatedEvent:
+        latestReviewedEventByTransactionKey.get(
+          `${normalizeStatus(item?.transactionType || "")}:${Number(item?.documentId || 0)}`,
+        ) || null,
       source: item,
       id: `tx-${item.transactionId}`,
       description: "",

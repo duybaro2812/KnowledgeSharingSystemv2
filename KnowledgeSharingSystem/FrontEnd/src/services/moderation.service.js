@@ -51,10 +51,20 @@ export function createModerationFeature(ctx) {
   };
 
   const loadDuplicateCandidates = async (documentId) => {
+    let result = null;
     await call(async () => {
-      const payload = await apiRequest(`/documents/${documentId}/duplicate-candidates`, { token });
-      setDuplicateByDocId((prev) => ({ ...prev, [documentId]: payload.data || [] }));
-    });
+      const payload = await apiRequest(`/documents/${documentId}/plagiarism-recheck`, {
+        method: "POST",
+        token,
+      });
+      result = payload?.data?.plagiarismCheck || payload?.data || null;
+      setDuplicateByDocId((prev) => ({
+        ...prev,
+        [documentId]: Array.isArray(result?.topCandidates) ? result.topCandidates : [],
+      }));
+      setStatus(payload?.message || `Duplicate check completed for document #${documentId}.`);
+    }, { actionKey: `doc:duplicate:${documentId}` });
+    return result;
   };
 
   return {

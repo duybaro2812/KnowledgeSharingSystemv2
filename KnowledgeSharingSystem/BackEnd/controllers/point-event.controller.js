@@ -17,6 +17,58 @@ const getPendingPointEvents = async (req, res, next) => {
     }
 };
 
+const getReviewedQaRatingEvents = async (req, res, next) => {
+    try {
+        const limit = req.query.limit ? Number(req.query.limit) : 50;
+        if (!Number.isInteger(limit) || limit <= 0) {
+            const error = new Error('limit must be a positive integer.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const events = await pointEventModel.getReviewedQaRatingEvents({ limit });
+
+        res.json({
+            success: true,
+            message: 'Reviewed Q&A rating events fetched successfully.',
+            data: events,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deleteQaRatingEvent = async (req, res, next) => {
+    try {
+        const eventId = Number(req.params.eventId);
+        const note = normalizeOptionalText({
+            value: req.body?.note,
+            fieldName: 'note',
+            maxLength: VALIDATION_RULES.document.moderationNoteMax,
+        });
+
+        if (!Number.isInteger(eventId) || eventId <= 0) {
+            const error = new Error('A valid Q&A rating event id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const deleted = await pointEventModel.deleteQaRatingEvent({
+            eventId,
+            deletedByUserId: req.user.userId,
+            deleteNote: note || null,
+        });
+
+        res.json({
+            success: true,
+            message: 'Q&A rating deleted successfully.',
+            data: deleted,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 const reviewPointEvent = async (req, res, next) => {
     try {
         const eventId = Number(req.params.eventId);
@@ -106,5 +158,7 @@ const reviewPointEvent = async (req, res, next) => {
 
 module.exports = {
     getPendingPointEvents,
+    getReviewedQaRatingEvents,
+    deleteQaRatingEvent,
     reviewPointEvent,
 };

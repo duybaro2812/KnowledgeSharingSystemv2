@@ -186,12 +186,15 @@ function PreviewPanel(props) {
     onStartQa,
     onReviewCommentPoint,
     onHideComment,
+    onRestoreComment,
+    onDeleteHiddenComment,
     onOpenHiddenKnowledge,
     onSaveHiddenKnowledge,
     onAddHiddenKnowledgeFromComment,
     isGuestMode,
     onNavigateToLogin,
     onNavigateToRegister,
+    focusCommentId = null,
     comments = [],
     onCreateComment,
     onCreateReply,
@@ -223,7 +226,18 @@ function PreviewPanel(props) {
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [isDownloadSuccessOpen, setIsDownloadSuccessOpen] = useState(false);
   const [downloadSuccessMessage, setDownloadSuccessMessage] = useState("");
+  const [commentPointModal, setCommentPointModal] = useState(null);
+  const [isSubmittingCommentPoint, setIsSubmittingCommentPoint] = useState(false);
+  const [hideCommentModal, setHideCommentModal] = useState(null);
+  const [isSubmittingHideComment, setIsSubmittingHideComment] = useState(false);
+  const [deleteCommentModal, setDeleteCommentModal] = useState(null);
+  const [deleteCommentReason, setDeleteCommentReason] = useState("");
+  const [deleteCommentPenalty, setDeleteCommentPenalty] = useState("0");
+  const [isSubmittingDeleteComment, setIsSubmittingDeleteComment] = useState(false);
   const previewFrameWrapRef = useRef(null);
+  const commentsPanelRef = useRef(null);
+  const commentItemRefs = useRef({});
+  const focusedCommentScrollKeyRef = useRef("");
   const currentPreviewDocId = Number(previewDoc?.documentId || 0);
 
   useEffect(() => {
@@ -231,7 +245,16 @@ function PreviewPanel(props) {
     setIsDownloadSuccessOpen(false);
   }, [currentPreviewDocId]);
 
-  const isDownloadModalOpen = isDownloadConfirmOpen || isDownloadSuccessOpen;
+  const isDownloadModalOpen =
+    isDownloadConfirmOpen ||
+    isDownloadSuccessOpen ||
+    Boolean(commentPointModal) ||
+    Boolean(hideCommentModal) ||
+    Boolean(deleteCommentModal) ||
+    isReportOpen ||
+    isQaOpen ||
+    isEarnPointsOpen ||
+    isHiddenKnowledgeOpen;
 
   useEffect(() => {
     if (!isDownloadModalOpen || typeof document === "undefined") return undefined;
@@ -266,6 +289,7 @@ function PreviewPanel(props) {
     });
     return bucket;
   }, [comments]);
+  const flattenedComments = useMemo(() => (Array.isArray(comments) ? comments : []), [comments]);
 
   const rootComments = childrenByParent[0] || [];
   const ownerUserId = Number(previewDoc.ownerUserId || previewDoc.ownerId || 0);
@@ -297,6 +321,26 @@ function PreviewPanel(props) {
   const isModeratorOrAdmin = ["moderator", "admin"].includes(
     String(previewDoc.currentUserRole || "").toLowerCase(),
   );
+
+  useEffect(() => {
+    const targetCommentId = Number(focusCommentId || 0);
+    if (targetCommentId <= 0 || docId <= 0) return;
+
+    const key = `${docId}:${targetCommentId}`;
+    if (focusedCommentScrollKeyRef.current === key) return;
+
+    const targetElement = commentItemRefs.current[targetCommentId] || commentsPanelRef.current;
+    if (!targetElement) return;
+
+    focusedCommentScrollKeyRef.current = key;
+    window.setTimeout(() => {
+      targetElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+        inline: "nearest",
+      });
+    }, 120);
+  }, [docId, focusCommentId, flattenedComments.length]);
   const accessState = String(previewDoc.accessState || "").toLowerCase();
   const tier = String(previewDoc.tier || "").toLowerCase();
   const isPrivilegedState = accessState === "privileged" || tier === "privileged";
@@ -471,6 +515,7 @@ function PreviewPanel(props) {
         status: hiddenKnowledgeStatus,
       });
       hydrateHiddenKnowledgeDraft(data);
+      setIsHiddenKnowledgeOpen(false);
     } catch (error) {
       setHiddenKnowledgeError(error?.message || "Unable to save hidden knowledge.");
     } finally {
@@ -483,15 +528,22 @@ function PreviewPanel(props) {
     const commentId = Number(comment?.commentId || 0);
     if (!commentId) return;
     setAddingKnowledgeCommentId(commentId);
+    setIsHiddenKnowledgeOpen(true);
+    setHiddenKnowledgeError("");
+    hydrateHiddenKnowledgeDraft(null);
+    setIsLoadingHiddenKnowledge(true);
     try {
-      await onAddHiddenKnowledgeFromComment(comment);
-      if (isHiddenKnowledgeOpen && onOpenHiddenKnowledge) {
+      await onAddHiddenKnowledgeFromComment(comment, { silent: true });
+      if (onOpenHiddenKnowledge) {
         const data = await onOpenHiddenKnowledge(docId);
         hydrateHiddenKnowledgeDraft(data);
+      } else {
+        setHiddenKnowledgeError("Hidden knowledge is not available in this screen.");
       }
     } catch (error) {
-      window.alert(error?.message || "Unable to add this comment to hidden knowledge.");
+      setHiddenKnowledgeError(error?.message || "Unable to add this comment to hidden knowledge.");
     } finally {
+      setIsLoadingHiddenKnowledge(false);
       setAddingKnowledgeCommentId(null);
     }
   };
@@ -578,18 +630,103 @@ function PreviewPanel(props) {
     }
   };
 
-  const handleReviewCommentPoint = async (comment) => {
+  const handleReviewCommentPoint = (comment) => {
     if (!onReviewCommentPoint || !isModeratorOrAdmin) return;
+    setCommentPointModal({
+      comment,
+      points: String(comment?.pointEventPoints || 10),
+      note: "",
+    });
+  };
 
-    const rawPoints = window.prompt("Nhap diem cho comment (10-15):", "10");
-    if (rawPoints === null) return;
-    const parsed = Number(rawPoints);
-    if (!Number.isInteger(parsed) || parsed < 10 || parsed > 15) {
-      window.alert("Diem hop le la so nguyen tu 10 den 15.");
+  const closeCommentPointModal = () => {
+    if (isSubmittingCommentPoint) return;
+    setCommentPointModal(null);
+  };
+
+  const submitCommentPointModal = async () => {
+    if (!commentPointModal || !onReviewCommentPoint || isSubmittingCommentPoint) return;
+    const parsed = Number(commentPointModal.points);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 15) {
+      window.alert("Diem hop le la so nguyen tu 0 den 15.");
       return;
     }
-    const note = window.prompt("Ghi chu danh gia (tuy chon):", "") || "";
-    await onReviewCommentPoint(comment, parsed, note);
+    setIsSubmittingCommentPoint(true);
+    try {
+      await onReviewCommentPoint(commentPointModal.comment, parsed, commentPointModal.note || "");
+      setCommentPointModal(null);
+    } finally {
+      setIsSubmittingCommentPoint(false);
+    }
+  };
+
+  const openHideCommentModal = (comment) => {
+    if (!onHideComment || isBusy || isSubmittingHideComment) return;
+    setHideCommentModal({ comment });
+  };
+
+  const closeHideCommentModal = () => {
+    if (isSubmittingHideComment) return;
+    setHideCommentModal(null);
+  };
+
+  const confirmHideComment = async () => {
+    if (!hideCommentModal?.comment || !onHideComment || isSubmittingHideComment || isBusy) return;
+    setIsSubmittingHideComment(true);
+    try {
+      await onHideComment(hideCommentModal.comment);
+      setHideCommentModal(null);
+    } finally {
+      setIsSubmittingHideComment(false);
+    }
+  };
+
+  const handleRestoreHiddenComment = async (comment) => {
+    if (!onRestoreComment || isBusy || isSubmittingDeleteComment) return;
+    await onRestoreComment(comment);
+  };
+
+  const openDeleteCommentModal = (comment) => {
+    if (!onDeleteHiddenComment || isBusy || isSubmittingDeleteComment) return;
+    setDeleteCommentModal({ comment });
+    setDeleteCommentReason("");
+    setDeleteCommentPenalty("0");
+  };
+
+  const closeDeleteCommentModal = () => {
+    if (isSubmittingDeleteComment) return;
+    setDeleteCommentModal(null);
+    setDeleteCommentReason("");
+    setDeleteCommentPenalty("0");
+  };
+
+  const confirmDeleteHiddenComment = async () => {
+    if (!deleteCommentModal?.comment || !onDeleteHiddenComment || isSubmittingDeleteComment || isBusy) return;
+    const reason = deleteCommentReason.trim();
+    const parsedPenalty = Number(deleteCommentPenalty);
+
+    if (!reason) {
+      window.alert("Vui lòng nhập lý do xóa bình luận.");
+      return;
+    }
+
+    if (!Number.isInteger(parsedPenalty) || parsedPenalty < 0 || parsedPenalty > 15) {
+      window.alert("Điểm trừ hợp lệ là số nguyên từ 0 đến 15.");
+      return;
+    }
+
+    setIsSubmittingDeleteComment(true);
+    try {
+      await onDeleteHiddenComment(deleteCommentModal.comment, {
+        reason,
+        penaltyPoints: parsedPenalty,
+      });
+      setDeleteCommentModal(null);
+      setDeleteCommentReason("");
+      setDeleteCommentPenalty("0");
+    } finally {
+      setIsSubmittingDeleteComment(false);
+    }
   };
 
   const lockOverlayContent = (
@@ -631,8 +768,13 @@ function PreviewPanel(props) {
     const replyChildren = childrenByParent[comment.commentId] || [];
     const isReplyOpen = Boolean(replyOpenByCommentId[comment.commentId]);
     const replyInput = replyInputByCommentId[comment.commentId] || "";
+    const commentId = Number(comment.commentId || 0);
+    const isFocusedComment = commentId > 0 && commentId === Number(focusCommentId || 0);
+    const commentStatus = String(comment?.status || "").toLowerCase();
+    const isHiddenComment = commentStatus === "hidden";
     const pointEventStatus = String(comment?.pointEventStatus || "").toLowerCase();
     const hasPointEvaluation = ["approved", "rejected"].includes(pointEventStatus);
+    const isUnreviewedComment = isModeratorOrAdmin && !hasPointEvaluation && !isHiddenComment;
     const evaluatedPoints = Number(comment?.pointEventPoints || 0);
     const pointEvaluationLabel =
       pointEventStatus === "approved"
@@ -644,11 +786,28 @@ function PreviewPanel(props) {
     return (
       <div
         key={comment.commentId}
-        className="comment-item"
+        ref={(node) => {
+          if (!commentId) return;
+          if (node) {
+            commentItemRefs.current[commentId] = node;
+          } else {
+            delete commentItemRefs.current[commentId];
+          }
+        }}
+        className={`comment-item ${isUnreviewedComment ? "is-unreviewed-comment" : ""} ${
+          isHiddenComment ? "is-hidden-comment" : ""
+        } ${
+          isFocusedComment ? "is-focused-comment" : ""
+        }`}
         style={{ marginLeft: `${Math.min(depth, 4) * 18}px` }}
       >
         <div className="comment-head">
-          <strong>{comment.authorName || "User"}</strong>
+          <div className="comment-author-line">
+            <strong>{comment.authorName || "User"}</strong>
+            {isModeratorOrAdmin && isHiddenComment && (
+              <span className="comment-hidden-badge">Đã ẩn</span>
+            )}
+          </div>
           <span className="comment-time">{new Date(comment.createdAt).toLocaleString()}</span>
         </div>
         <p className="comment-content">{comment.content}</p>
@@ -670,7 +829,7 @@ function PreviewPanel(props) {
           {isModeratorOrAdmin && (
             <>
               <button type="button" onClick={() => handleReviewCommentPoint(comment)}>
-                {hasPointEvaluation ? "Sua danh gia diem" : "Evaluate 10-15"}
+                {hasPointEvaluation ? "Sua danh gia diem" : "Evaluate 0-15"}
               </button>
               {onAddHiddenKnowledgeFromComment && (
                 <button
@@ -683,17 +842,34 @@ function PreviewPanel(props) {
                     : "Add experience"}
                 </button>
               )}
-              <button
-                type="button"
-                className="danger-ghost"
-                disabled={isBusy}
-                onClick={() => {
-                  const ok = window.confirm("Hide this comment from document discussion?");
-                  if (ok && onHideComment) onHideComment(comment);
-                }}
-              >
-                Hide
-              </button>
+              {isHiddenComment ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={isBusy || isSubmittingDeleteComment || !onRestoreComment}
+                    onClick={() => handleRestoreHiddenComment(comment)}
+                  >
+                    Hiện lại
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-ghost"
+                    disabled={isBusy || isSubmittingDeleteComment || !onDeleteHiddenComment}
+                    onClick={() => openDeleteCommentModal(comment)}
+                  >
+                    Xóa
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="danger-ghost"
+                  disabled={isBusy || isSubmittingHideComment}
+                  onClick={() => openHideCommentModal(comment)}
+                >
+                  Hide
+                </button>
+              )}
             </>
           )}
         </div>
@@ -743,7 +919,7 @@ function PreviewPanel(props) {
         <div>
           <h2>Document reader</h2>
           <p>
-            {previewDoc.title} ({previewDoc.originalFileName})
+            {previewDoc.title} ({previewDoc.displayFileName || previewDoc.downloadFileName || previewDoc.originalFileName})
           </p>
           <p className="preview-owner">Author: {previewDoc.ownerName || "NeuShare member"}</p>
         </div>
@@ -836,6 +1012,16 @@ function PreviewPanel(props) {
           </div>
         )}
         <div className="preview-actions-right">
+          {canAskAuthor && (
+            <button
+              type="button"
+              className="preview-ask-author-btn"
+              disabled={isBusy || isSubmittingQa}
+              onClick={handleOpenAskAuthor}
+            >
+              Hỏi tác giả
+            </button>
+          )}
           <button type="button" className="danger-ghost preview-report-btn" disabled={isBusy} onClick={openReportModal}>
             Report Document
           </button>
@@ -883,7 +1069,7 @@ function PreviewPanel(props) {
         )}
       </div>
 
-      <section className="comments-panel">
+      <section className="comments-panel" ref={commentsPanelRef}>
         <h3>Comments</h3>
         <div className="comment-editor">
           <input
@@ -1039,180 +1225,339 @@ function PreviewPanel(props) {
         </ModalPortal>
       )}
 
-      {isQaOpen && (
-        <div className="report-modal-backdrop" role="dialog" aria-modal="true">
-          <div className="report-modal">
+      {commentPointModal && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal point-review-modal">
             <div className="report-modal-head">
-              <h3>Ask the author</h3>
-              <button type="button" className="report-close-btn" onClick={closeQaModal}>
+              <h3>Chấm điểm bình luận</h3>
+              <button type="button" className="report-close-btn" onClick={closeCommentPointModal}>
                 x
               </button>
             </div>
-            {shouldShowAuthCta ? (
-              <>
-                <p className="report-modal-sub">
-                  Ban chua dang nhap. Vui long dang nhap hoac dang ky de hoi tac gia.
-                </p>
-                <div className="report-modal-actions">
-                  <button type="button" onClick={closeQaModal}>
-                    Close
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-btn"
-                    onClick={() => onNavigateToLogin && onNavigateToLogin()}
-                  >
-                    Đăng nhập
-                  </button>
-                  <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>Đăng ký</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="report-modal-sub">Start a private Q&A session with the document owner.</p>
-                <textarea
-                  className="report-textarea"
-                  value={qaMessage}
-                  onChange={(e) => setQaMessage(e.target.value)}
-                  placeholder="Write your first question..."
-                  rows={4}
-                />
-                <div className="report-modal-actions">
-                  <button type="button" onClick={closeQaModal}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-btn"
-                    disabled={isSubmittingQa || isBusy}
-                    onClick={handleStartQa}
-                  >
-                    {isSubmittingQa ? "Starting..." : "Start Q&A"}
-                  </button>
-                </div>
-              </>
-            )}
+            <p className="report-modal-sub">
+              Comment #{commentPointModal.comment?.commentId} - {commentPointModal.comment?.authorName || "User"}
+            </p>
+            <div className="moderation-comment-content">
+              {commentPointModal.comment?.content || ""}
+            </div>
+            <label className="point-review-field">
+              <span>Điểm bình luận (0-15)</span>
+              <input
+                type="number"
+                min="0"
+                max="15"
+                value={commentPointModal.points}
+                disabled={isSubmittingCommentPoint || isBusy}
+                onChange={(event) =>
+                  setCommentPointModal((prev) => ({ ...prev, points: event.target.value }))
+                }
+              />
+            </label>
+            <label className="point-review-field">
+              <span>Ghi chú kiểm duyệt</span>
+              <textarea
+                rows={4}
+                value={commentPointModal.note}
+                disabled={isSubmittingCommentPoint || isBusy}
+                onChange={(event) =>
+                  setCommentPointModal((prev) => ({ ...prev, note: event.target.value }))
+                }
+                placeholder="Nhập ghi chú nếu cần"
+              />
+            </label>
+            <div className="report-modal-actions">
+              <button type="button" onClick={closeCommentPointModal} disabled={isSubmittingCommentPoint}>
+                Hủy
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={isSubmittingCommentPoint || isBusy}
+                onClick={submitCommentPointModal}
+              >
+                {isSubmittingCommentPoint ? "Đang lưu..." : "Xác nhận chấm điểm"}
+              </button>
+            </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
-      {isEarnPointsOpen && (
-        <div className="report-modal-backdrop" role="dialog" aria-modal="true">
-          <div className="report-modal">
-            <div className="report-modal-head">
-              <h3>How to earn points</h3>
-              <button type="button" className="report-close-btn" onClick={closeEarnPointsModal}>
-                x
-              </button>
+      {hideCommentModal && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal hide-comment-modal">
+              <div className="report-modal-head">
+                <h3>Ẩn bình luận</h3>
+                <button type="button" className="report-close-btn" onClick={closeHideCommentModal}>
+                  x
+                </button>
+              </div>
+              <p className="report-modal-sub">
+                Bình luận này sẽ bị ẩn khỏi phần thảo luận của tài liệu.
+              </p>
+              <div className="moderation-comment-content">
+                <strong>{hideCommentModal.comment?.authorName || "User"}</strong>
+                <p>{hideCommentModal.comment?.content || ""}</p>
+              </div>
+              <p className="download-confirm-note">
+                Bạn có chắc chắn muốn ẩn bình luận này không?
+              </p>
+              <div className="report-modal-actions">
+                <button type="button" onClick={closeHideCommentModal} disabled={isSubmittingHideComment}>
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  disabled={isSubmittingHideComment || isBusy}
+                  onClick={confirmHideComment}
+                >
+                  {isSubmittingHideComment ? "Đang ẩn..." : "Xác nhận ẩn"}
+                </button>
+              </div>
             </div>
-            <p className="report-modal-sub">Contribute to the community to unlock full view and downloads.</p>
-            <ul className="earn-points-list">
-              <li>Upload tai lieu moi va cho moderator/admin duyet.</li>
-              <li>Tai lieu duoc duyet se nhan them diem thuong.</li>
-              <li>Binh luan va tra loi thao luan co chat luong.</li>
-              <li>Nhan upvote/danh gia tich cuc tu nguoi dung khac.</li>
-              <li>Tham gia Q&A va ho tro nguoi hoc khac.</li>
-            </ul>
-            <div className="report-modal-actions">
-              <button type="button" onClick={closeEarnPointsModal}>
-                Close
-              </button>
+          </div>
+        </ModalPortal>
+      )}
+
+      {deleteCommentModal && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal delete-comment-modal">
+              <div className="report-modal-head">
+                <h3>Xóa bình luận đã ẩn</h3>
+                <button type="button" className="report-close-btn" onClick={closeDeleteCommentModal}>
+                  x
+                </button>
+              </div>
+              <p className="report-modal-sub">
+                Bình luận sẽ bị xóa khỏi hệ thống, người dùng sẽ nhận thông báo kèm lý do và điểm bị trừ.
+              </p>
+              <div className="moderation-comment-content">
+                <strong>{deleteCommentModal.comment?.authorName || "User"}</strong>
+                <p>{deleteCommentModal.comment?.content || ""}</p>
+              </div>
+              <label className="point-review-field">
+                <span>Lý do xóa</span>
+                <textarea
+                  rows={4}
+                  value={deleteCommentReason}
+                  disabled={isSubmittingDeleteComment || isBusy}
+                  onChange={(event) => setDeleteCommentReason(event.target.value)}
+                  placeholder="Nhập lý do để gửi tới người dùng"
+                />
+              </label>
+              <label className="point-review-field">
+                <span>Điểm trừ (0-15)</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="15"
+                  value={deleteCommentPenalty}
+                  disabled={isSubmittingDeleteComment || isBusy}
+                  onChange={(event) => setDeleteCommentPenalty(event.target.value)}
+                />
+              </label>
+              <div className="report-modal-actions">
+                <button type="button" onClick={closeDeleteCommentModal} disabled={isSubmittingDeleteComment}>
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  disabled={isSubmittingDeleteComment || isBusy}
+                  onClick={confirmDeleteHiddenComment}
+                >
+                  {isSubmittingDeleteComment ? "Đang xóa..." : "Xác nhận xóa"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {isQaOpen && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal">
+              <div className="report-modal-head">
+                <h3>Ask the author</h3>
+                <button type="button" className="report-close-btn" onClick={closeQaModal}>
+                  x
+                </button>
+              </div>
               {shouldShowAuthCta ? (
                 <>
-                  <button
-                    type="button"
-                    className="primary-btn"
-                    onClick={() => onNavigateToLogin && onNavigateToLogin()}
-                  >
-                    Đăng nhập
-                  </button>
-                  <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>Đăng ký</button>
+                  <p className="report-modal-sub">
+                    Ban chua dang nhap. Vui long dang nhap hoac dang ky de hoi tac gia.
+                  </p>
+                  <div className="report-modal-actions">
+                    <button type="button" onClick={closeQaModal}>
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => onNavigateToLogin && onNavigateToLogin()}
+                    >
+                      Đăng nhập
+                    </button>
+                    <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>Đăng ký</button>
+                  </div>
                 </>
               ) : (
-                <button type="button" className="primary-btn" onClick={onClose}>
-                  Go upload now
-                </button>
+                <>
+                  <p className="report-modal-sub">Start a private Q&A session with the document owner.</p>
+                  <textarea
+                    className="report-textarea"
+                    value={qaMessage}
+                    onChange={(e) => setQaMessage(e.target.value)}
+                    placeholder="Write your first question..."
+                    rows={4}
+                  />
+                  <div className="report-modal-actions">
+                    <button type="button" onClick={closeQaModal}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      disabled={isSubmittingQa || isBusy}
+                      onClick={handleStartQa}
+                    >
+                      {isSubmittingQa ? "Starting..." : "Start Q&A"}
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           </div>
-        </div>
+        </ModalPortal>
+      )}
+
+      {isEarnPointsOpen && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal">
+              <div className="report-modal-head">
+                <h3>How to earn points</h3>
+                <button type="button" className="report-close-btn" onClick={closeEarnPointsModal}>
+                  x
+                </button>
+              </div>
+              <p className="report-modal-sub">Contribute to the community to unlock full view and downloads.</p>
+              <ul className="earn-points-list">
+                <li>Upload tai lieu moi va cho moderator/admin duyet.</li>
+                <li>Tai lieu duoc duyet se nhan them diem thuong.</li>
+                <li>Binh luan va tra loi thao luan co chat luong.</li>
+                <li>Nhan upvote/danh gia tich cuc tu nguoi dung khac.</li>
+                <li>Tham gia Q&A va ho tro nguoi hoc khac.</li>
+              </ul>
+              <div className="report-modal-actions">
+                <button type="button" onClick={closeEarnPointsModal}>
+                  Close
+                </button>
+                {shouldShowAuthCta ? (
+                  <>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => onNavigateToLogin && onNavigateToLogin()}
+                    >
+                      Đăng nhập
+                    </button>
+                    <button type="button" onClick={() => onNavigateToRegister && onNavigateToRegister()}>Đăng ký</button>
+                  </>
+                ) : (
+                  <button type="button" className="primary-btn" onClick={onClose}>
+                    Go upload now
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
       )}
 
       {isHiddenKnowledgeOpen && (
-        <div className="report-modal-backdrop" role="dialog" aria-modal="true">
-          <div className="report-modal hidden-knowledge-modal">
-            <div className="report-modal-head">
-              <h3>{"T\u1ed5ng h\u1ee3p kinh nghi\u1ec7m"}</h3>
-              <button type="button" className="report-close-btn" onClick={closeHiddenKnowledgeModal}>
-                x
-              </button>
-            </div>
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal hidden-knowledge-modal">
+              <div className="report-modal-head">
+                <h3>{"T\u1ed5ng h\u1ee3p kinh nghi\u1ec7m"}</h3>
+                <button type="button" className="report-close-btn" onClick={closeHiddenKnowledgeModal}>
+                  x
+                </button>
+              </div>
 
-            {isLoadingHiddenKnowledge ? (
-              <p className="report-modal-sub">Loading hidden knowledge...</p>
-            ) : hiddenKnowledgeError ? (
-              <div className="hidden-knowledge-error">
-                <strong>Access blocked</strong>
-                <p>{hiddenKnowledgeError}</p>
-                <small>Users need more than 60 points to view this page.</small>
-              </div>
-            ) : hiddenKnowledge?.canEdit ? (
-              <div className="hidden-knowledge-editor">
-                <label>
-                  <span>Title</span>
-                  <input
-                    type="text"
-                    value={hiddenKnowledgeTitle}
-                    onChange={(event) => setHiddenKnowledgeTitle(event.target.value)}
-                    disabled={isSavingHiddenKnowledge || isBusy}
-                  />
-                </label>
-                <label>
-                  <span>Status</span>
-                  <select
-                    value={hiddenKnowledgeStatus}
-                    onChange={(event) => setHiddenKnowledgeStatus(event.target.value)}
-                    disabled={isSavingHiddenKnowledge || isBusy}
-                  >
-                    <option value="draft">Draft</option>
-                    <option value="published">Published</option>
-                    <option value="archived">Archived</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Content</span>
-                  <textarea
-                    value={hiddenKnowledgeContent}
-                    onChange={(event) => setHiddenKnowledgeContent(event.target.value)}
-                    disabled={isSavingHiddenKnowledge || isBusy}
-                    rows={14}
-                  />
-                </label>
-                <div className="report-modal-actions">
-                  <button type="button" onClick={closeHiddenKnowledgeModal}>
-                    Close
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-btn"
-                    disabled={isSavingHiddenKnowledge || isBusy || !hiddenKnowledgeTitle.trim()}
-                    onClick={saveHiddenKnowledge}
-                  >
-                    {isSavingHiddenKnowledge ? "Saving..." : "Save"}
-                  </button>
+              {isLoadingHiddenKnowledge ? (
+                <p className="report-modal-sub">Loading hidden knowledge...</p>
+              ) : hiddenKnowledgeError ? (
+                <div className="hidden-knowledge-error">
+                  <strong>Access blocked</strong>
+                  <p>{hiddenKnowledgeError}</p>
+                  <small>Users need more than 60 points to view this page.</small>
                 </div>
-              </div>
-            ) : (
-              <article className="hidden-knowledge-reader">
-                <h4>{hiddenKnowledgeTitle || hiddenKnowledge?.title}</h4>
-                <p className="report-modal-sub">
-                  Required points: {Number(hiddenKnowledge?.requiredPoints || hiddenKnowledge?.minPointsToView || 61)}
-                </p>
-                <pre>{hiddenKnowledgeContent || "No hidden knowledge content yet."}</pre>
-              </article>
-            )}
+              ) : hiddenKnowledge?.canEdit ? (
+                <div className="hidden-knowledge-editor">
+                  <label>
+                    <span>Title</span>
+                    <input
+                      type="text"
+                      value={hiddenKnowledgeTitle}
+                      onChange={(event) => setHiddenKnowledgeTitle(event.target.value)}
+                      disabled={isSavingHiddenKnowledge || isBusy}
+                    />
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select
+                      value={hiddenKnowledgeStatus}
+                      onChange={(event) => setHiddenKnowledgeStatus(event.target.value)}
+                      disabled={isSavingHiddenKnowledge || isBusy}
+                    >
+                      <option value="draft">Draft</option>
+                      <option value="published">Published</option>
+                      <option value="archived">Archived</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Content</span>
+                    <textarea
+                      value={hiddenKnowledgeContent}
+                      onChange={(event) => setHiddenKnowledgeContent(event.target.value)}
+                      disabled={isSavingHiddenKnowledge || isBusy}
+                      rows={14}
+                    />
+                  </label>
+                  <div className="report-modal-actions">
+                    <button type="button" onClick={closeHiddenKnowledgeModal}>
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      disabled={isSavingHiddenKnowledge || isBusy || !hiddenKnowledgeTitle.trim()}
+                      onClick={saveHiddenKnowledge}
+                    >
+                      {isSavingHiddenKnowledge ? "Saving..." : "Xác nhận"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <article className="hidden-knowledge-reader">
+                  <h4>{hiddenKnowledgeTitle || hiddenKnowledge?.title}</h4>
+                  <p className="report-modal-sub">
+                    Required points: {Number(hiddenKnowledge?.requiredPoints || hiddenKnowledge?.minPointsToView || 61)}
+                  </p>
+                  <pre>{hiddenKnowledgeContent || "No hidden knowledge content yet."}</pre>
+                </article>
+              )}
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </section>
   );

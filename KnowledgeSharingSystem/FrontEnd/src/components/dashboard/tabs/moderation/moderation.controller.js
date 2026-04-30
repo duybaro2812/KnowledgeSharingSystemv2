@@ -14,6 +14,7 @@ export function createModerationController(input) {
   };
 
   return {
+    onChangeQueue: (queue) => input.setModerationQueue && input.setModerationQueue(queue),
     onOpenPreview: (doc) => input.openPreview(doc),
     onCheckDuplicate: (docId) => ensureModerator() && input.loadDuplicateCandidates(docId),
     onApprove: (docId) => ensureModerator() && input.moderateDocument(docId, "approved"),
@@ -44,19 +45,27 @@ export function createModerationController(input) {
       const parsedPointDelta = toIntOrNull(pointDelta);
       const body = { decision: "approved", note: String(note || "").trim() };
       if (parsedPointDelta !== null) body.pointDelta = parsedPointDelta;
-      input.reviewPointEvent(eventId, body);
+      return input.reviewPointEvent(eventId, body);
     },
     onRejectPointEvent: (eventId) => {
       if (!ensureModerator()) return;
       const note = window.prompt("Rejection reason:", "") || "";
       if (!note.trim()) return;
-      input.reviewPointEvent(eventId, { decision: "rejected", note: note.trim() });
+      return input.reviewPointEvent(eventId, { decision: "rejected", note: note.trim() });
     },
     onRejectPointEventInline: (eventId, note = "") => {
       if (!ensureModerator()) return;
       const normalizedNote = String(note || "").trim();
       if (!normalizedNote) return;
-      input.reviewPointEvent(eventId, { decision: "rejected", note: normalizedNote });
+      return input.reviewPointEvent(eventId, { decision: "rejected", note: normalizedNote });
+    },
+    onDeleteQaRating: (eventId) => {
+      if (!ensureModerator() || !input.deleteQaRatingEvent) return;
+      const parsedEventId = Number(eventId);
+      if (!Number.isInteger(parsedEventId) || parsedEventId <= 0) return;
+      return input.deleteQaRatingEvent(parsedEventId, {
+        note: `Deleted Q&A rating event #${parsedEventId} by moderator.`,
+      });
     },
     onApproveComment: (commentId, reviewNote = "") =>
       ensureModerator() &&
@@ -77,19 +86,11 @@ export function createModerationController(input) {
       ensureModerator() && input.hideCommentForModeration(commentId, documentId),
     onAddCommentExperience: async (comment) => {
       if (!ensureModerator() || !input.onAddHiddenKnowledgeFromComment) return;
-      try {
-        await input.onAddHiddenKnowledgeFromComment(comment);
-      } catch (error) {
-        window.alert(error?.message || "Unable to add this comment to hidden knowledge.");
-      }
+      return input.onAddHiddenKnowledgeFromComment(comment);
     },
     onAddQaRatingExperience: async (event) => {
       if (!ensureModerator() || !input.onAddHiddenKnowledgeFromQaRating) return;
-      try {
-        await input.onAddHiddenKnowledgeFromQaRating(event);
-      } catch (error) {
-        window.alert(error?.message || "Unable to add this Q&A feedback to hidden knowledge.");
-      }
+      return input.onAddHiddenKnowledgeFromQaRating(event);
     },
     onRefreshOverview: () => ensureModerator() && input.loadModerationOverview(),
   };

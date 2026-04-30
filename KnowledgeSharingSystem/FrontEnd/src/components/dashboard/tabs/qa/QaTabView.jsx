@@ -1,4 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+
+function ModalPortal({ children }) {
+  if (typeof document === "undefined") return children;
+  return createPortal(children, document.body);
+}
 
 function normalizeStatus(value) {
   const status = String(value || "").trim().toLowerCase();
@@ -103,6 +109,11 @@ function QaTabView({ model, controller }) {
   const [draftQuestionSummary, setDraftQuestionSummary] = useState("");
   const [draftAuthorSolution, setDraftAuthorSolution] = useState("");
   const [draftIsSatisfied, setDraftIsSatisfied] = useState(true);
+  const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
+  const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
+  const [isSubmittingClose, setIsSubmittingClose] = useState(false);
+  const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const [qaNoticeModal, setQaNoticeModal] = useState(null);
   const [addingMessageId, setAddingMessageId] = useState(null);
   const messageListRef = useRef(null);
 
@@ -139,6 +150,7 @@ function QaTabView({ model, controller }) {
   const hasRated = Boolean(activeSession?.hasRatedByCurrentUser || ratedValue);
   const ratingToDisplay = explicitRating > 0 ? explicitRating : persistedRating > 0 ? persistedRating : 5;
   const canSubmitRating = isClosed && isAsker && !hasRated;
+  const isAnyModalOpen = Boolean(isCloseModalOpen || isRatingModalOpen || qaNoticeModal);
   const noticeText = hasRated
     ? "Rating submitted successfully."
     : isClosed
@@ -159,7 +171,23 @@ function QaTabView({ model, controller }) {
     setDraftAuthorSolution("");
     setDraftIsSatisfied(true);
     setDraftMessage("");
+    setIsCloseModalOpen(false);
+    setIsRatingModalOpen(false);
   }, [activeSessionId, activeSession?.rating, activeSession?.stars, ratedValue]);
+
+  useEffect(() => {
+    if (!isAnyModalOpen || typeof document === "undefined") return undefined;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [isAnyModalOpen]);
 
   useEffect(() => {
     const container = messageListRef.current;
@@ -181,20 +209,41 @@ function QaTabView({ model, controller }) {
 
   const handleCloseSession = async () => {
     if (!activeSessionId || model.isBusy) return;
-    const accepted = window.confirm("Do you want to close this Q&A session?");
-    if (!accepted) return;
-    await controller.onCloseSession(activeSessionId);
+    setIsCloseModalOpen(true);
+  };
+
+  const handleConfirmCloseSession = async () => {
+    if (!activeSessionId || model.isBusy || isSubmittingClose) return;
+    setIsSubmittingClose(true);
+    try {
+      await controller.onCloseSession(activeSessionId);
+      setIsCloseModalOpen(false);
+    } finally {
+      setIsSubmittingClose(false);
+    }
   };
 
   const handleRateSession = async () => {
-    if (!activeSessionId || model.isBusy || selectedStars < 1) return;
-    await controller.onRateSession(activeSessionId, selectedStars, {
-      feedback: draftFeedback,
-      questionSummary: draftQuestionSummary,
-      authorSolution: draftAuthorSolution,
-      satisfactionNote: draftFeedback,
-      isSatisfied: draftIsSatisfied,
-    });
+    if (!activeSessionId || model.isBusy || isSubmittingRating || selectedStars < 1) return;
+    setIsSubmittingRating(true);
+    try {
+      await controller.onRateSession(activeSessionId, selectedStars, {
+        feedback: draftFeedback,
+        questionSummary: draftQuestionSummary,
+        authorSolution: draftAuthorSolution,
+        satisfactionNote: draftFeedback,
+        isSatisfied: draftIsSatisfied,
+      });
+      setIsRatingModalOpen(false);
+    } finally {
+      setIsSubmittingRating(false);
+    }
+  };
+
+  const openRatingModal = () => {
+    if (!canSubmitRating || model.isBusy) return;
+    setSelectedStars((current) => (current > 0 ? current : 5));
+    setIsRatingModalOpen(true);
   };
 
   const handleAddMessageExperience = async (message) => {
@@ -203,6 +252,15 @@ function QaTabView({ model, controller }) {
     setAddingMessageId(messageId);
     try {
       await controller.onAddMessageExperience(message);
+      setQaNoticeModal({
+        title: "Đã thêm kinh nghiệm",
+        message: "Nội dung Q&A đã được thêm vào trang tổng hợp kinh nghiệm của tài liệu.",
+      });
+    } catch (error) {
+      setQaNoticeModal({
+        title: "Không thể thêm kinh nghiệm",
+        message: error?.message || "Không thể thêm nội dung Q&A vào trang tổng hợp kinh nghiệm.",
+      });
     } finally {
       setAddingMessageId(null);
     }
@@ -359,69 +417,19 @@ function QaTabView({ model, controller }) {
         </div>
 
         {isClosed ? (
-          canSubmitRating ? (
-            <section className="qa-rating-card">
-              <h4>Rate this Q&A session</h4>
-              <p className="qa-rating-question">
-                Please describe your question, how the author resolved it, and whether you were satisfied.
-              </p>
-              <div className="qa-stars" role="radiogroup" aria-label="Choose rating from one to five stars">
-                {[1, 2, 3, 4, 5].map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={selectedStars >= value ? "active" : ""}
-                    onClick={() => setSelectedStars(value)}
-                    aria-label={`${value} stars`}
-                  >
-                    *
-                  </button>
-                ))}
-              </div>
-              <textarea
-                value={draftQuestionSummary}
-                onChange={(event) => setDraftQuestionSummary(event.target.value)}
-                placeholder="What was your question or confusion?"
-                maxLength={2000}
-                disabled={model.isBusy}
-              />
-              <textarea
-                value={draftAuthorSolution}
-                onChange={(event) => setDraftAuthorSolution(event.target.value)}
-                placeholder="How did the author explain or solve it?"
-                maxLength={2000}
-                disabled={model.isBusy}
-              />
-              <textarea
-                value={draftFeedback}
-                onChange={(event) => setDraftFeedback(event.target.value)}
-                placeholder="Were you satisfied with the answer?"
-                maxLength={2000}
-                disabled={model.isBusy}
-              />
-              <label className="qa-rating-satisfied">
-                <input
-                  type="checkbox"
-                  checked={draftIsSatisfied}
-                  disabled={model.isBusy}
-                  onChange={(event) => setDraftIsSatisfied(event.target.checked)}
-                />
-                <span>I am satisfied with this answer.</span>
-              </label>
+          <footer className="qa-closed-note">
+            <p>This session has been closed.</p>
+            {canSubmitRating ? (
               <button
                 type="button"
-                className="primary-btn"
-                onClick={handleRateSession}
-                disabled={model.isBusy || selectedStars < 1}
+                className="primary-btn qa-rate-open-btn"
+                onClick={openRatingModal}
+                disabled={model.isBusy}
               >
-                Submit rating
+                Đánh giá phiên chat
               </button>
-            </section>
-          ) : (
-            <footer className="qa-closed-note">
-              <p>This session has been closed.</p>
-            </footer>
-          )
+            ) : null}
+          </footer>
         ) : (
           <form
             className="qa-composer"
@@ -445,6 +453,170 @@ function QaTabView({ model, controller }) {
           </form>
         )}
       </article>
+
+      {isCloseModalOpen && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal qa-session-modal">
+              <div className="report-modal-head">
+                <h3>Xác nhận đóng phiên chat</h3>
+                <button
+                  type="button"
+                  className="report-close-btn"
+                  onClick={() => setIsCloseModalOpen(false)}
+                  disabled={isSubmittingClose}
+                >
+                  x
+                </button>
+              </div>
+              <p className="report-modal-sub">
+                Sau khi đóng, phiên Q&A sẽ chuyển sang trạng thái chỉ đọc. Người hỏi có thể gửi đánh giá cho phiên này.
+              </p>
+              <div className="qa-modal-summary">
+                <strong>{activeSession?.documentTitle || "Untitled document"}</strong>
+                <span>
+                  {isAsker ? activeSession?.ownerName : activeSession?.askerName || "NeuShare member"}
+                </span>
+              </div>
+              <div className="report-modal-actions">
+                <button type="button" onClick={() => setIsCloseModalOpen(false)} disabled={isSubmittingClose}>
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={handleConfirmCloseSession}
+                  disabled={isSubmittingClose || model.isBusy}
+                >
+                  {isSubmittingClose ? "Đang đóng..." : "Xác nhận đóng"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {isRatingModalOpen && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal qa-session-modal qa-rating-modal">
+              <div className="report-modal-head">
+                <h3>Đánh giá phiên Q&A</h3>
+                <button
+                  type="button"
+                  className="report-close-btn"
+                  onClick={() => setIsRatingModalOpen(false)}
+                  disabled={isSubmittingRating}
+                >
+                  x
+                </button>
+              </div>
+              <p className="report-modal-sub">
+                Vui lòng nêu thắc mắc của bạn, cách tác giả đã giải đáp, và bạn có hài lòng với câu trả lời không.
+              </p>
+
+              <label className="point-review-field">
+                <span>Số sao đánh giá</span>
+                <div className="qa-stars qa-stars-modal" role="radiogroup" aria-label="Choose rating from one to five stars">
+                  {[1, 2, 3, 4, 5].map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={selectedStars >= value ? "active" : ""}
+                      onClick={() => setSelectedStars(value)}
+                      aria-label={`${value} stars`}
+                      disabled={isSubmittingRating || model.isBusy}
+                    >
+                      *
+                    </button>
+                  ))}
+                </div>
+              </label>
+
+              <label className="point-review-field">
+                <span>Thắc mắc của bạn</span>
+                <textarea
+                  rows={3}
+                  value={draftQuestionSummary}
+                  onChange={(event) => setDraftQuestionSummary(event.target.value)}
+                  placeholder="Ví dụ: Tôi chưa hiểu cách áp dụng công thức ở dạng bài này..."
+                  maxLength={2000}
+                  disabled={isSubmittingRating || model.isBusy}
+                />
+              </label>
+
+              <label className="point-review-field">
+                <span>Cách tác giả giải đáp</span>
+                <textarea
+                  rows={3}
+                  value={draftAuthorSolution}
+                  onChange={(event) => setDraftAuthorSolution(event.target.value)}
+                  placeholder="Ví dụ: Tác giả giải thích từng bước và đưa ví dụ tương tự..."
+                  maxLength={2000}
+                  disabled={isSubmittingRating || model.isBusy}
+                />
+              </label>
+
+              <label className="point-review-field">
+                <span>Nhận xét thêm</span>
+                <textarea
+                  rows={3}
+                  value={draftFeedback}
+                  onChange={(event) => setDraftFeedback(event.target.value)}
+                  placeholder="Bạn hài lòng với câu trả lời chứ?"
+                  maxLength={2000}
+                  disabled={isSubmittingRating || model.isBusy}
+                />
+              </label>
+
+              <label className="qa-rating-satisfied qa-rating-satisfied-modal">
+                <input
+                  type="checkbox"
+                  checked={draftIsSatisfied}
+                  disabled={isSubmittingRating || model.isBusy}
+                  onChange={(event) => setDraftIsSatisfied(event.target.checked)}
+                />
+                <span>Tôi hài lòng với câu trả lời.</span>
+              </label>
+
+              <div className="report-modal-actions">
+                <button type="button" onClick={() => setIsRatingModalOpen(false)} disabled={isSubmittingRating}>
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={handleRateSession}
+                  disabled={isSubmittingRating || model.isBusy || selectedStars < 1}
+                >
+                  {isSubmittingRating ? "Đang gửi..." : "Gửi đánh giá"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {qaNoticeModal && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal qa-session-modal">
+              <div className="report-modal-head">
+                <h3>{qaNoticeModal.title}</h3>
+                <button type="button" className="report-close-btn" onClick={() => setQaNoticeModal(null)}>
+                  x
+                </button>
+              </div>
+              <p className="report-modal-sub">{qaNoticeModal.message}</p>
+              <div className="report-modal-actions">
+                <button type="button" className="primary-btn" onClick={() => setQaNoticeModal(null)}>
+                  Xác nhận
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
     </section>
   );
 }

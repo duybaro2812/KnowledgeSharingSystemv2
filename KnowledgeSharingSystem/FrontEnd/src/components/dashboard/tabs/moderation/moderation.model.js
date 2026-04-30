@@ -24,13 +24,43 @@ export function createModerationModel(input) {
     });
     return acc;
   }, {});
-
-  const qaRatingEvents = pendingPointEvents
-    .filter((event) => String(event?.eventType || "").toLowerCase() === "qa_session_rated")
+  const commentPointEvents = pendingPointEvents
+    .filter((event) => Number(event?.commentId || 0) > 0)
     .map((event) => ({
       ...event,
       metadataJson: parseMetadata(event?.metadata),
     }));
+
+  const qaRatingEvents = pendingPointEvents
+    .filter((event) => {
+      const eventType = String(event?.eventType || "").toLowerCase();
+      return eventType === "qa_session_rated" || eventType.includes("qa_rating");
+    })
+    .map((event) => ({
+      ...event,
+      metadataJson: parseMetadata(event?.metadata),
+      reviewState:
+        event?.reviewState ||
+        (String(event?.status || "").toLowerCase() === "approved" ? "reviewed" : "pending"),
+    }));
+  const reviewedQaRatingEvents = Array.isArray(input.reviewedQaRatingEvents)
+    ? input.reviewedQaRatingEvents.map((event) => ({
+        ...event,
+        metadataJson: parseMetadata(event?.metadata),
+        reviewState: "reviewed",
+        reviewedPoints: Number(event?.points ?? event?.approvedPoints ?? 0),
+      }))
+    : [];
+  const qaRatingEventIds = new Set(
+    qaRatingEvents.map((event) => Number(event?.eventId || 0)).filter((eventId) => eventId > 0),
+  );
+  const mergedQaRatingEvents = [
+    ...qaRatingEvents,
+    ...reviewedQaRatingEvents.filter((event) => !qaRatingEventIds.has(Number(event?.eventId || 0))),
+  ];
+  const pendingQaRatingCount = qaRatingEvents.filter(
+    (event) => String(event?.status || "").toLowerCase() === "pending",
+  ).length;
 
   const moderationStats = input.moderationStats || null;
   const moderationTimeline = Array.isArray(input.moderationTimeline)
@@ -58,12 +88,18 @@ export function createModerationModel(input) {
   return {
     isModerator: !!input.isModerator,
     isBusy: Boolean(input.isBusy),
+    moderationQueue: ["documents", "comments", "qa-ratings"].includes(String(input.moderationQueue || "").toLowerCase())
+      ? String(input.moderationQueue || "").toLowerCase()
+      : "documents",
     pendingDocs: Array.isArray(input.pendingDocs) ? input.pendingDocs : [],
     reportedDocs: Array.isArray(input.reportedDocs) ? input.reportedDocs : [],
     pendingPointEvents,
+    reviewedQaRatingEvents,
     pendingComments,
+    commentPointEvents,
     commentPointEventsByCommentId,
-    qaRatingEvents,
+    qaRatingEvents: mergedQaRatingEvents,
+    pendingQaRatingCount,
     moderationFocus: input.moderationFocus || {
       documentId: null,
       commentId: null,

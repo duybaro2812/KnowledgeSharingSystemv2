@@ -34,10 +34,16 @@ function AppController() {
   };
 
   const queryParams = getUrlSearchParams();
+  const normalizeModerationQueue = (value) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    return ["documents", "comments", "qa-ratings"].includes(normalized) ? normalized : "documents";
+  };
+
   const queryDocId = queryParams.get("docId");
   const queryTab = queryParams.get("tab");
   const queryAuth = queryParams.get("auth");
   const querySessionId = queryParams.get("sessionId");
+  const queryQueue = normalizeModerationQueue(queryParams.get("queue"));
 
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(() => {
@@ -83,6 +89,7 @@ function AppController() {
   const [pendingDocs, setPendingDocs] = useState([]);
   const [reportedDocs, setReportedDocs] = useState([]);
   const [pendingPointEvents, setPendingPointEvents] = useState([]);
+  const [reviewedQaRatingEvents, setReviewedQaRatingEvents] = useState([]);
   const [pendingComments, setPendingComments] = useState([]);
   const [moderationStats, setModerationStats] = useState(null);
   const [moderationTimeline, setModerationTimeline] = useState([]);
@@ -107,6 +114,7 @@ function AppController() {
   const [qaRatedSessionMap, setQaRatedSessionMap] = useState({});
   const [recentlyOpenedDocIds, setRecentlyOpenedDocIds] = useState([]);
   const [totalMyDocUpvotes, setTotalMyDocUpvotes] = useState(0);
+  const [moderationQueue, setModerationQueue] = useState(queryQueue);
   const [moderationFocus, setModerationFocus] = useState({
     documentId: null,
     commentId: null,
@@ -178,6 +186,7 @@ function AppController() {
     setQaMessages([]);
     setQaFilter("all");
     setQaRatedSessionMap({});
+    setModerationQueue("documents");
     setModerationFocus({
       documentId: null,
       commentId: null,
@@ -208,6 +217,8 @@ function AppController() {
     preserveDocId = false,
     sessionId = null,
     preserveSessionId = false,
+    queue = null,
+    preserveQueue = false,
     nextAuth = null,
     replace = false,
   } = {}) => {
@@ -230,6 +241,12 @@ function AppController() {
         current.searchParams.set("sessionId", String(sessionId));
       } else if (!preserveSessionId) {
         current.searchParams.delete("sessionId");
+      }
+
+      if (nextTab === "moderation") {
+        current.searchParams.set("queue", normalizeModerationQueue(queue));
+      } else if (!preserveQueue) {
+        current.searchParams.delete("queue");
       }
 
       if (nextAuth) {
@@ -274,6 +291,10 @@ function AppController() {
       }
       if (current.searchParams.has("sessionId")) {
         current.searchParams.delete("sessionId");
+        changed = true;
+      }
+      if (current.searchParams.has("queue")) {
+        current.searchParams.delete("queue");
         changed = true;
       }
       if (current.searchParams.get("auth") !== "guest") {
@@ -353,7 +374,16 @@ function AppController() {
       preserveDocId = false,
       sessionId = null,
       preserveSessionId = false,
+      queue = null,
+      preserveQueue = false,
     } = options;
+    const nextModerationQueue =
+      nextTab === "moderation"
+        ? normalizeModerationQueue(queue || moderationQueue)
+        : null;
+    if (nextTab === "moderation") {
+      setModerationQueue(nextModerationQueue);
+    }
     setActiveTabState(nextTab);
     updateUrlState({
       nextTab,
@@ -361,6 +391,8 @@ function AppController() {
       preserveDocId,
       sessionId,
       preserveSessionId,
+      queue: nextModerationQueue,
+      preserveQueue,
       replace,
     });
 
@@ -1058,6 +1090,7 @@ function AppController() {
     loadMyDocuments,
     loadPendingDocuments,
     loadCategories,
+    refreshCurrentUser,
   });
 
   const { loadAdminUsers, changeUserRole, setUserActiveStatus, deleteUserAccount } =
@@ -1090,11 +1123,12 @@ function AppController() {
     loadMyDocuments,
   });
 
-  const { loadPendingPointEvents, reviewPointEvent } = createPointEventFeature({
+  const { loadPendingPointEvents, loadReviewedQaRatingEvents, deleteQaRatingEvent, reviewPointEvent } = createPointEventFeature({
     token,
     call,
     setStatus,
     setPendingPointEvents,
+    setReviewedQaRatingEvents,
   });
 
   const { loadAllPointData } = createPointsFeature({
@@ -1144,6 +1178,8 @@ function AppController() {
     loadPendingCommentsForModeration,
     reviewPendingComment,
     hideCommentForModeration,
+    restoreCommentForModeration,
+    deleteHiddenCommentForModeration,
   } = createCommentFeature({
     token,
     call,
@@ -1198,6 +1234,7 @@ function AppController() {
       const params = getUrlSearchParams();
       const nextDocId = params.get("docId");
       const nextSessionId = params.get("sessionId");
+      const nextQueue = normalizeModerationQueue(params.get("queue"));
       let nextTab = params.get("tab") || (nextDocId ? "reader" : "home");
       if (nextTab === "reader" && !nextDocId) {
         nextTab = "home";
@@ -1206,6 +1243,7 @@ function AppController() {
 
       setActiveTabState(nextTab);
       setAuthModeState(nextAuthMode);
+      setModerationQueue(nextQueue);
 
       if (nextTab !== "reader") {
         setPreviewDoc(null);
@@ -1296,6 +1334,7 @@ function AppController() {
           tasks.push(loadPendingDocuments(token));
           tasks.push(loadReportedDocuments(token));
           tasks.push(loadPendingPointEvents());
+          tasks.push(loadReviewedQaRatingEvents());
           tasks.push(loadPendingCommentsForModeration());
           tasks.push(loadModerationOverview());
         }
@@ -1314,6 +1353,7 @@ function AppController() {
         loadPendingDocuments(token),
         loadReportedDocuments(token),
         loadPendingPointEvents(),
+        loadReviewedQaRatingEvents(),
         loadPendingCommentsForModeration(),
         loadModerationOverview(),
       ]);
@@ -1715,6 +1755,11 @@ function AppController() {
     : user;
   const visibleTabsForDashboard =
     dashboardUser?.role ? roleTabs[dashboardUser.role] || roleTabs.user : roleTabs.user;
+  const navigateModerationQueue = (queue) => {
+    const nextQueue = normalizeModerationQueue(queue);
+    setModerationQueue(nextQueue);
+    setActiveTab("moderation", { queue: nextQueue });
+  };
 
   const findDocById = (documentId) => {
     const pool = [...docs, ...myDocs, ...pendingDocs, ...reportedDocs, ...categoryDocs];
@@ -1766,9 +1811,9 @@ function AppController() {
     if (!Number.isInteger(commentId) || commentId <= 0) return;
 
     const parsedPoints = Number(points);
-    if (!Number.isInteger(parsedPoints) || parsedPoints < 10 || parsedPoints > 15) {
+    if (!Number.isInteger(parsedPoints) || parsedPoints < 0 || parsedPoints > 15) {
       setStatus("");
-      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 10-15.");
+      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 0-15.");
       return;
     }
 
@@ -1808,9 +1853,9 @@ function AppController() {
     if (!Number.isInteger(commentId) || commentId <= 0) return;
 
     const parsedPoints = Number(points);
-    if (!Number.isInteger(parsedPoints) || parsedPoints < 10 || parsedPoints > 15) {
+    if (!Number.isInteger(parsedPoints) || parsedPoints < 0 || parsedPoints > 15) {
       setStatus("");
-      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 10-15.");
+      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 0-15.");
       return;
     }
 
@@ -1866,9 +1911,9 @@ function AppController() {
     if (!Number.isInteger(commentId) || commentId <= 0) return;
 
     const parsedPoints = Number(points);
-    if (!Number.isInteger(parsedPoints) || parsedPoints < 10 || parsedPoints > 15) {
+    if (!Number.isInteger(parsedPoints) || parsedPoints < 0 || parsedPoints > 15) {
       setStatus("");
-      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 10-15.");
+      setError("Điểm đánh giá comment phải là số nguyên trong khoảng 0-15.");
       return;
     }
 
@@ -1943,6 +1988,53 @@ function AppController() {
     await hideCommentForModeration(commentId, Number.isInteger(documentId) && documentId > 0 ? documentId : null);
   };
 
+  const restoreCommentFromPreview = async (comment) => {
+    const role = String(user?.role || "").toLowerCase();
+    if (!["admin", "moderator"].includes(role)) {
+      setStatus("");
+      setError("Only moderator/admin can restore comments.");
+      return;
+    }
+
+    const commentId = Number(comment?.commentId || 0);
+    const documentId = Number(comment?.documentId || previewDoc?.documentId || 0);
+    if (!Number.isInteger(commentId) || commentId <= 0) return;
+
+    await restoreCommentForModeration(commentId, Number.isInteger(documentId) && documentId > 0 ? documentId : null);
+  };
+
+  const deleteHiddenCommentFromPreview = async (comment, body = {}) => {
+    const role = String(user?.role || "").toLowerCase();
+    if (!["admin", "moderator"].includes(role)) {
+      setStatus("");
+      setError("Only moderator/admin can delete hidden comments.");
+      return;
+    }
+
+    const commentId = Number(comment?.commentId || 0);
+    const documentId = Number(comment?.documentId || previewDoc?.documentId || 0);
+    const reason = String(body?.reason || "").trim();
+    const penaltyPoints = Number(body?.penaltyPoints ?? 0);
+
+    if (!Number.isInteger(commentId) || commentId <= 0) return;
+    if (!reason) {
+      setStatus("");
+      setError("Delete reason is required.");
+      return;
+    }
+    if (!Number.isInteger(penaltyPoints) || penaltyPoints < 0 || penaltyPoints > 15) {
+      setStatus("");
+      setError("Penalty points must be an integer from 0 to 15.");
+      return;
+    }
+
+    await deleteHiddenCommentForModeration(
+      commentId,
+      { reason, penaltyPoints },
+      Number.isInteger(documentId) && documentId > 0 ? documentId : null,
+    );
+  };
+
   const loadHiddenKnowledgeForPreview = async (documentId) => {
     const numericId = Number(documentId || 0);
     if (!token) {
@@ -1970,11 +2062,14 @@ function AppController() {
       token,
       body,
     });
-    setStatus("Hidden knowledge updated successfully.");
+    setStatus("Cập nhật tổng hợp kinh nghiệm thành công.");
     return payload?.data || null;
   };
 
-  const addHiddenKnowledgeSource = async ({ documentId, sourceType, sourceId = null, extractedText = "" }) => {
+  const addHiddenKnowledgeSource = async (
+    { documentId, sourceType, sourceId = null, extractedText = "" },
+    options = {},
+  ) => {
     const numericId = Number(documentId || 0);
     if (!token) {
       throw new Error(requireAuthMessage);
@@ -1992,11 +2087,13 @@ function AppController() {
         extractedText,
       },
     });
-    setStatus(payload?.message || "Source added to hidden knowledge.");
+    if (!options.silent) {
+      setStatus(payload?.message || "Source added to hidden knowledge.");
+    }
     return payload?.data || null;
   };
 
-  const addCommentToHiddenKnowledge = async (comment) => {
+  const addCommentToHiddenKnowledge = async (comment, options = {}) => {
     const documentId = Number(comment?.documentId || previewDoc?.documentId || 0);
     const commentId = Number(comment?.commentId || 0);
     if (!Number.isInteger(commentId) || commentId <= 0) {
@@ -2007,7 +2104,7 @@ function AppController() {
       sourceType: "comment",
       sourceId: commentId,
       extractedText: comment?.content || "",
-    });
+    }, options);
   };
 
   const addQaRatingToHiddenKnowledge = async (event) => {
@@ -2199,14 +2296,22 @@ function AppController() {
       );
       const pointEventId = Number(metadata?.pointEventId || metadata?.eventId || 0);
       const isModerationUser = hasModeratorRole(user?.role);
+      const metadataAction = String(metadata?.action || "").toLowerCase();
       const isCommentFlow =
         type.includes("comment") ||
-        String(metadata?.action || "").toLowerCase().includes("comment");
+        metadataAction.includes("comment");
       const isQaRatingFlow =
         type.includes("qa_rating") ||
         type.includes("qa_session_rated") ||
         type.includes("qa_rating_pending_review") ||
-        String(metadata?.action || "").toLowerCase().includes("qa.rating");
+        metadataAction.includes("qa.rating");
+      const isDocumentReviewFlow =
+        type.includes("document_moderation") ||
+        type.includes("plagiarism") ||
+        type.includes("report") ||
+        metadataAction.includes("document.pending_review") ||
+        metadataAction.includes("document.plagiarism") ||
+        metadataAction.includes("document.report");
       const isModerationFlow =
         type.includes("moderation") ||
         type.includes("report") ||
@@ -2215,20 +2320,44 @@ function AppController() {
         isCommentFlow ||
         isQaRatingFlow;
 
+      if (isModerationUser && isCommentFlow && Number.isInteger(documentId) && documentId > 0) {
+        setModerationFocus({
+          documentId,
+          commentId: Number.isInteger(commentId) && commentId > 0 ? commentId : null,
+          qaSessionId: Number.isInteger(sessionId) && sessionId > 0 ? sessionId : null,
+          pointEventId: Number.isInteger(pointEventId) && pointEventId > 0 ? pointEventId : null,
+        });
+        await Promise.allSettled([
+          loadPendingPointEvents(),
+          loadPendingCommentsForModeration(),
+        ]);
+        const payload = await apiRequest(`/documents/${documentId}`, { token });
+        const doc = payload?.data || null;
+        if (doc) {
+          openPreview(doc);
+          return;
+        }
+      }
+
       if (isModerationUser && isModerationFlow) {
+        const nextQueue = isQaRatingFlow ? "qa-ratings" : isCommentFlow ? "comments" : "documents";
         setModerationFocus({
           documentId: Number.isInteger(documentId) && documentId > 0 ? documentId : null,
           commentId: Number.isInteger(commentId) && commentId > 0 ? commentId : null,
           qaSessionId: Number.isInteger(sessionId) && sessionId > 0 ? sessionId : null,
           pointEventId: Number.isInteger(pointEventId) && pointEventId > 0 ? pointEventId : null,
         });
-        setActiveTab("moderation");
-        await Promise.allSettled([
-          loadPendingDocuments(token),
-          loadReportedDocuments(token),
-          loadPendingPointEvents(),
-          loadPendingCommentsForModeration(),
-        ]);
+        setActiveTab("moderation", { queue: nextQueue });
+        const moderationTasks =
+          nextQueue === "documents"
+            ? [loadPendingDocuments(token), loadReportedDocuments(token), loadModerationOverview()]
+            : nextQueue === "qa-ratings"
+              ? [loadPendingPointEvents(), loadReviewedQaRatingEvents(), loadModerationOverview()]
+              : [loadPendingPointEvents(), loadReviewedQaRatingEvents(), loadPendingCommentsForModeration(), loadModerationOverview()];
+        if (isDocumentReviewFlow) {
+          moderationTasks.push(loadPendingPointEvents());
+        }
+        await Promise.allSettled(moderationTasks);
         return;
       }
 
@@ -2387,13 +2516,17 @@ function AppController() {
     pendingDocs,
     reportedDocs,
     pendingPointEvents,
+    reviewedQaRatingEvents,
     pendingComments,
     moderationStats,
     moderationTimeline,
+    moderationQueue,
+    setModerationQueue: navigateModerationQueue,
     moderationFocus,
     loadModerationOverview,
     resolveReportedDocument,
     reviewPointEvent,
+    deleteQaRatingEvent,
     reviewPendingComment,
     hideCommentForModeration,
     loadDuplicateCandidates,
@@ -2456,6 +2589,8 @@ function AppController() {
     },
     onReviewCommentPointFromPreview: reviewCommentPointFromPreviewV3,
     onHideCommentFromPreview: hideCommentFromPreview,
+    onRestoreCommentFromPreview: restoreCommentFromPreview,
+    onDeleteHiddenCommentFromPreview: deleteHiddenCommentFromPreview,
     onOpenHiddenKnowledge: loadHiddenKnowledgeForPreview,
     onSaveHiddenKnowledge: saveHiddenKnowledgeForPreview,
     onAddHiddenKnowledgeFromComment: addCommentToHiddenKnowledge,

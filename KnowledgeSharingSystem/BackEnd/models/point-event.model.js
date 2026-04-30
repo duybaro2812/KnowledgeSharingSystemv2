@@ -219,6 +219,527 @@ const createPointEvent = async ({
     return result.recordset[0] || null;
 };
 
+const awardUploadSubmittedPoints = async ({
+    userId,
+    documentId,
+    points,
+    metadata = null,
+}) => {
+    const pool = getPool();
+    const eventType = EVENT_TYPES.UPLOAD_SUBMITTED;
+    const transactionType = EVENT_TO_TRANSACTION_TYPE[eventType] || 'upload_reward';
+    const description = `Upload submission reward for document #${documentId}.`;
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const metadataPayload = metadata ? JSON.stringify(metadata) : null;
+            const existingResult = await client.query(
+                `
+                    SELECT
+                        pe.event_id AS "eventId",
+                        pe.user_id AS "userId",
+                        pe.event_type AS "eventType",
+                        pe.points,
+                        pe.status,
+                        pe.document_id AS "documentId"
+                    FROM point_events pe
+                    WHERE pe.user_id = $1
+                      AND pe.document_id = $2
+                      AND pe.event_type = $3::VARCHAR(50)
+                    ORDER BY pe.event_id DESC
+                    LIMIT 1
+                    FOR UPDATE;
+                `,
+                [userId, documentId, eventType]
+            );
+
+            let pointEvent = existingResult.rows[0] || null;
+            const wasAlreadyApproved = String(pointEvent?.status || '').toLowerCase() === 'approved';
+
+            if (!pointEvent) {
+                const inserted = await client.query(
+                    `
+                        INSERT INTO point_events (
+                            user_id,
+                            event_type,
+                            points,
+                            status,
+                            document_id,
+                            metadata,
+                            reviewed_at
+                        )
+                        VALUES ($1, $2::VARCHAR(50), $3, 'approved', $4, $5, NOW())
+                        RETURNING
+                            event_id AS "eventId",
+                            user_id AS "userId",
+                            event_type AS "eventType",
+                            points,
+                            status,
+                            document_id AS "documentId";
+                    `,
+                    [userId, eventType, points, documentId, metadataPayload]
+                );
+                pointEvent = inserted.rows[0] || null;
+            } else if (!wasAlreadyApproved) {
+                const updated = await client.query(
+                    `
+                        UPDATE point_events
+                        SET
+                            status = 'approved',
+                            points = $2,
+                            metadata = COALESCE($3, metadata),
+                            reviewed_at = NOW()
+                        WHERE event_id = $1
+                        RETURNING
+                            event_id AS "eventId",
+                            user_id AS "userId",
+                            event_type AS "eventType",
+                            points,
+                            status,
+                            document_id AS "documentId";
+                    `,
+                    [pointEvent.eventId, points, metadataPayload]
+                );
+                pointEvent = updated.rows[0] || pointEvent;
+            }
+
+            let userPointsAfter = null;
+            if (!wasAlreadyApproved && pointEvent) {
+                const balanceResult = await client.query(
+                    `
+                        UPDATE users
+                        SET points = points + $2, updated_at = NOW()
+                        WHERE user_id = $1
+                        RETURNING points AS "userPointsAfter";
+                    `,
+                    [userId, points]
+                );
+                userPointsAfter = balanceResult.rows[0]?.userPointsAfter ?? null;
+
+                await client.query(
+                    `
+                        INSERT INTO point_transactions (
+                            user_id,
+                            transaction_type,
+                            points,
+                            description,
+                            document_id,
+                            answer_id,
+                            review_id
+                        )
+                        VALUES ($1, $2, $3, $4, $5, NULL, NULL);
+                    `,
+                    [userId, transactionType, points, description, documentId]
+                );
+            } else {
+                const balanceResult = await client.query(
+                    `SELECT points AS "userPointsAfter" FROM users WHERE user_id = $1;`,
+                    [userId]
+                );
+                userPointsAfter = balanceResult.rows[0]?.userPointsAfter ?? null;
+            }
+
+            await client.query('COMMIT');
+            return {
+                ...(pointEvent || {}),
+                awardedPoints: wasAlreadyApproved ? 0 : points,
+                userPointsAfter,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+        const existingRequest = new sql.Request(transaction);
+        existingRequest.input('userId', sql.Int, userId);
+        existingRequest.input('documentId', sql.Int, documentId);
+        existingRequest.input('eventType', sql.NVarChar(50), eventType);
+        const existingResult = await existingRequest.query(`
+            SELECT TOP 1
+                pe.eventId,
+                pe.userId,
+                pe.eventType,
+                pe.points,
+                pe.status,
+                pe.documentId
+            FROM dbo.PointEvents pe WITH (UPDLOCK, HOLDLOCK)
+            WHERE pe.userId = @userId
+              AND pe.documentId = @documentId
+              AND pe.eventType = @eventType
+            ORDER BY pe.eventId DESC;
+        `);
+
+        let pointEvent = existingResult.recordset[0] || null;
+        const wasAlreadyApproved = String(pointEvent?.status || '').toLowerCase() === 'approved';
+
+        if (!pointEvent) {
+            const insertRequest = new sql.Request(transaction);
+            insertRequest.input('userId', sql.Int, userId);
+            insertRequest.input('eventType', sql.NVarChar(50), eventType);
+            insertRequest.input('points', sql.Int, points);
+            insertRequest.input('documentId', sql.Int, documentId);
+            insertRequest.input('metadata', sql.NVarChar(sql.MAX), metadata ? JSON.stringify(metadata) : null);
+            const inserted = await insertRequest.query(`
+                INSERT INTO dbo.PointEvents (
+                    userId,
+                    eventType,
+                    points,
+                    status,
+                    documentId,
+                    metadata,
+                    reviewedAt
+                )
+                VALUES (
+                    @userId,
+                    @eventType,
+                    @points,
+                    N'approved',
+                    @documentId,
+                    @metadata,
+                    SYSDATETIME()
+                );
+
+                SELECT
+                    CAST(SCOPE_IDENTITY() AS INT) AS eventId,
+                    @userId AS userId,
+                    @eventType AS eventType,
+                    @points AS points,
+                    N'approved' AS status,
+                    @documentId AS documentId;
+            `);
+            pointEvent = inserted.recordset[0] || null;
+        } else if (!wasAlreadyApproved) {
+            const updateRequest = new sql.Request(transaction);
+            updateRequest.input('eventId', sql.Int, pointEvent.eventId);
+            updateRequest.input('points', sql.Int, points);
+            updateRequest.input('metadata', sql.NVarChar(sql.MAX), metadata ? JSON.stringify(metadata) : null);
+            await updateRequest.query(`
+                UPDATE dbo.PointEvents
+                SET
+                    status = N'approved',
+                    points = @points,
+                    metadata = COALESCE(@metadata, metadata),
+                    reviewedAt = SYSDATETIME()
+                WHERE eventId = @eventId;
+            `);
+            pointEvent = { ...pointEvent, points, status: 'approved' };
+        }
+
+        let userPointsAfter = null;
+        if (!wasAlreadyApproved && pointEvent) {
+            const rewardRequest = new sql.Request(transaction);
+            rewardRequest.input('userId', sql.Int, userId);
+            rewardRequest.input('points', sql.Int, points);
+            rewardRequest.input('transactionType', sql.NVarChar(50), transactionType);
+            rewardRequest.input('description', sql.NVarChar(255), description);
+            rewardRequest.input('documentId', sql.Int, documentId);
+            const rewardResult = await rewardRequest.query(`
+                UPDATE dbo.Users
+                SET points = points + @points, updatedAt = SYSDATETIME()
+                WHERE userId = @userId;
+
+                INSERT INTO dbo.PointTransactions (
+                    userId,
+                    transactionType,
+                    points,
+                    description,
+                    documentId,
+                    answerId,
+                    reviewId
+                )
+                VALUES (
+                    @userId,
+                    @transactionType,
+                    @points,
+                    @description,
+                    @documentId,
+                    NULL,
+                    NULL
+                );
+
+                SELECT points AS userPointsAfter
+                FROM dbo.Users
+                WHERE userId = @userId;
+            `);
+            userPointsAfter = rewardResult.recordset[0]?.userPointsAfter ?? null;
+        } else {
+            const balanceRequest = new sql.Request(transaction);
+            balanceRequest.input('userId', sql.Int, userId);
+            const balanceResult = await balanceRequest.query(`
+                SELECT points AS userPointsAfter
+                FROM dbo.Users
+                WHERE userId = @userId;
+            `);
+            userPointsAfter = balanceResult.recordset[0]?.userPointsAfter ?? null;
+        }
+
+        await transaction.commit();
+        return {
+            ...(pointEvent || {}),
+            awardedPoints: wasAlreadyApproved ? 0 : points,
+            userPointsAfter,
+        };
+    } catch (error) {
+        if (transaction._aborted !== true) {
+            await transaction.rollback();
+        }
+        throw error;
+    }
+};
+
+const revertUploadSubmittedPointsForRejectedDocument = async ({
+    documentId,
+    reviewedByUserId,
+    reviewNote = null,
+}) => {
+    const pool = getPool();
+    const eventType = EVENT_TYPES.UPLOAD_SUBMITTED;
+    const transactionType = EVENT_TO_TRANSACTION_TYPE[eventType] || 'upload_reward';
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const eventResult = await client.query(
+                `
+                    SELECT
+                        pe.event_id AS "eventId",
+                        pe.user_id AS "userId",
+                        pe.event_type AS "eventType",
+                        pe.points,
+                        pe.status,
+                        pe.document_id AS "documentId"
+                    FROM point_events pe
+                    WHERE pe.document_id = $1
+                      AND pe.event_type = $2::VARCHAR(50)
+                    ORDER BY pe.event_id DESC
+                    LIMIT 1
+                    FOR UPDATE;
+                `,
+                [documentId, eventType]
+            );
+            const pointEvent = eventResult.rows[0] || null;
+
+            if (!pointEvent) {
+                await client.query('COMMIT');
+                return {
+                    revertedPoints: 0,
+                    userPointsAfter: null,
+                    reason: 'upload_submitted_event_not_found',
+                };
+            }
+
+            const previousStatus = String(pointEvent.status || '').toLowerCase();
+            let revertedPoints = 0;
+            let userPointsAfter = null;
+
+            if (previousStatus === 'approved' && Number(pointEvent.points || 0) > 0) {
+                const balanceResult = await client.query(
+                    `SELECT points FROM users WHERE user_id = $1 FOR UPDATE;`,
+                    [pointEvent.userId]
+                );
+                const currentPoints = Number(balanceResult.rows[0]?.points || 0);
+                revertedPoints = Math.min(currentPoints, Number(pointEvent.points || 0));
+
+                if (revertedPoints > 0) {
+                    const updatedBalance = await client.query(
+                        `
+                            UPDATE users
+                            SET points = points - $2, updated_at = NOW()
+                            WHERE user_id = $1
+                            RETURNING points AS "userPointsAfter";
+                        `,
+                        [pointEvent.userId, revertedPoints]
+                    );
+                    userPointsAfter = updatedBalance.rows[0]?.userPointsAfter ?? null;
+
+                    await client.query(
+                        `
+                            INSERT INTO point_transactions (
+                                user_id,
+                                transaction_type,
+                                points,
+                                description,
+                                document_id,
+                                answer_id,
+                                review_id
+                            )
+                            VALUES ($1, $2, $3, $4, $5, NULL, NULL);
+                        `,
+                        [
+                            pointEvent.userId,
+                            transactionType,
+                            -revertedPoints,
+                            `Upload submission reward reverted for rejected document #${documentId}.`,
+                            documentId,
+                        ]
+                    );
+                } else {
+                    userPointsAfter = currentPoints;
+                }
+            }
+
+            await client.query(
+                `
+                    UPDATE point_events
+                    SET
+                        status = 'rejected',
+                        reviewed_by_user_id = $2,
+                        review_note = $3,
+                        reviewed_at = NOW()
+                    WHERE event_id = $1;
+                `,
+                [pointEvent.eventId, reviewedByUserId, reviewNote]
+            );
+
+            await client.query('COMMIT');
+            return {
+                ...pointEvent,
+                status: 'rejected',
+                reviewedByUserId,
+                reviewNote,
+                revertedPoints,
+                userPointsAfter,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+        const eventRequest = new sql.Request(transaction);
+        eventRequest.input('documentId', sql.Int, documentId);
+        eventRequest.input('eventType', sql.NVarChar(50), eventType);
+        const eventResult = await eventRequest.query(`
+            SELECT TOP 1
+                pe.eventId,
+                pe.userId,
+                pe.eventType,
+                pe.points,
+                pe.status,
+                pe.documentId
+            FROM dbo.PointEvents pe WITH (UPDLOCK, HOLDLOCK)
+            WHERE pe.documentId = @documentId
+              AND pe.eventType = @eventType
+            ORDER BY pe.eventId DESC;
+        `);
+        const pointEvent = eventResult.recordset[0] || null;
+
+        if (!pointEvent) {
+            await transaction.commit();
+            return {
+                revertedPoints: 0,
+                userPointsAfter: null,
+                reason: 'upload_submitted_event_not_found',
+            };
+        }
+
+        const previousStatus = String(pointEvent.status || '').toLowerCase();
+        let revertedPoints = 0;
+        let userPointsAfter = null;
+
+        if (previousStatus === 'approved' && Number(pointEvent.points || 0) > 0) {
+            const balanceRequest = new sql.Request(transaction);
+            balanceRequest.input('userId', sql.Int, pointEvent.userId);
+            const balanceResult = await balanceRequest.query(`
+                SELECT points
+                FROM dbo.Users WITH (UPDLOCK, ROWLOCK)
+                WHERE userId = @userId;
+            `);
+            const currentPoints = Number(balanceResult.recordset[0]?.points || 0);
+            revertedPoints = Math.min(currentPoints, Number(pointEvent.points || 0));
+
+            if (revertedPoints > 0) {
+                const revertRequest = new sql.Request(transaction);
+                revertRequest.input('userId', sql.Int, pointEvent.userId);
+                revertRequest.input('revertedPoints', sql.Int, revertedPoints);
+                revertRequest.input('transactionType', sql.NVarChar(50), transactionType);
+                revertRequest.input(
+                    'description',
+                    sql.NVarChar(255),
+                    `Upload submission reward reverted for rejected document #${documentId}.`
+                );
+                revertRequest.input('documentId', sql.Int, documentId);
+                const revertResult = await revertRequest.query(`
+                    UPDATE dbo.Users
+                    SET points = points - @revertedPoints, updatedAt = SYSDATETIME()
+                    WHERE userId = @userId;
+
+                    INSERT INTO dbo.PointTransactions (
+                        userId,
+                        transactionType,
+                        points,
+                        description,
+                        documentId,
+                        answerId,
+                        reviewId
+                    )
+                    VALUES (
+                        @userId,
+                        @transactionType,
+                        -@revertedPoints,
+                        @description,
+                        @documentId,
+                        NULL,
+                        NULL
+                    );
+
+                    SELECT points AS userPointsAfter
+                    FROM dbo.Users
+                    WHERE userId = @userId;
+                `);
+                userPointsAfter = revertResult.recordset[0]?.userPointsAfter ?? null;
+            } else {
+                userPointsAfter = currentPoints;
+            }
+        }
+
+        const updateRequest = new sql.Request(transaction);
+        updateRequest.input('eventId', sql.Int, pointEvent.eventId);
+        updateRequest.input('reviewedByUserId', sql.Int, reviewedByUserId);
+        updateRequest.input('reviewNote', sql.NVarChar(255), reviewNote);
+        await updateRequest.query(`
+            UPDATE dbo.PointEvents
+            SET
+                status = N'rejected',
+                reviewedByUserId = @reviewedByUserId,
+                reviewNote = @reviewNote,
+                reviewedAt = SYSDATETIME()
+            WHERE eventId = @eventId;
+        `);
+
+        await transaction.commit();
+        return {
+            ...pointEvent,
+            status: 'rejected',
+            reviewedByUserId,
+            reviewNote,
+            revertedPoints,
+            userPointsAfter,
+        };
+    } catch (error) {
+        if (transaction._aborted !== true) {
+            await transaction.rollback();
+        }
+        throw error;
+    }
+};
+
 const getPendingPointEvents = async () => {
     const pool = getPool();
 
@@ -276,6 +797,353 @@ const getPendingPointEvents = async () => {
     `);
 
     return result.recordset;
+};
+
+const getReviewedQaRatingEvents = async ({ limit = 50 } = {}) => {
+    const pool = getPool();
+    const parsedLimit = Number(limit);
+    const safeLimit = Number.isInteger(parsedLimit)
+        ? Math.min(Math.max(parsedLimit, 1), 100)
+        : 50;
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                SELECT
+                    pe.event_id AS "eventId",
+                    pe.user_id AS "userId",
+                    u.username,
+                    u.name AS "userName",
+                    u.email AS "userEmail",
+                    pe.event_type AS "eventType",
+                    pe.points,
+                    pe.status,
+                    pe.document_id AS "documentId",
+                    pe.comment_id AS "commentId",
+                    pe.qa_session_id AS "qaSessionId",
+                    pe.source_user_id AS "sourceUserId",
+                    d.title AS "documentTitle",
+                    pe.metadata,
+                    pe.created_at AS "createdAt",
+                    pe.reviewed_by_user_id AS "reviewedByUserId",
+                    reviewer.name AS "reviewedByName",
+                    pe.review_note AS "reviewNote",
+                    pe.reviewed_at AS "reviewedAt"
+                FROM point_events pe
+                INNER JOIN users u ON u.user_id = pe.user_id
+                LEFT JOIN users reviewer ON reviewer.user_id = pe.reviewed_by_user_id
+                LEFT JOIN documents d ON d.document_id = pe.document_id
+                WHERE pe.event_type = 'qa_session_rated'
+                  AND pe.status = 'approved'
+                ORDER BY pe.reviewed_at DESC NULLS LAST, pe.created_at DESC, pe.event_id DESC
+                LIMIT $1;
+            `,
+            [safeLimit]
+        );
+        return result.rows;
+    }
+
+    const request = pool.request();
+    request.input('limit', sql.Int, safeLimit);
+    const result = await request.query(`
+        SELECT TOP (@limit)
+            pe.eventId,
+            pe.userId,
+            u.username,
+            u.name AS userName,
+            u.email AS userEmail,
+            pe.eventType,
+            pe.points,
+            pe.status,
+            pe.documentId,
+            pe.commentId,
+            pe.qaSessionId,
+            pe.sourceUserId,
+            d.title AS documentTitle,
+            pe.metadata,
+            pe.createdAt,
+            pe.reviewedByUserId,
+            reviewer.name AS reviewedByName,
+            pe.reviewNote,
+            pe.reviewedAt
+        FROM dbo.PointEvents pe
+        INNER JOIN dbo.Users u ON u.userId = pe.userId
+        LEFT JOIN dbo.Users reviewer ON reviewer.userId = pe.reviewedByUserId
+        LEFT JOIN dbo.Documents d ON d.documentId = pe.documentId
+        WHERE pe.eventType = N'qa_session_rated'
+          AND pe.status = N'approved'
+        ORDER BY pe.reviewedAt DESC, pe.createdAt DESC, pe.eventId DESC;
+    `);
+
+    return result.recordset;
+};
+
+const deleteQaRatingEvent = async ({
+    eventId,
+    deletedByUserId,
+    deleteNote = null,
+}) => {
+    const pool = getPool();
+    const eventType = EVENT_TYPES.QA_SESSION_RATED;
+    const transactionType = EVENT_TO_TRANSACTION_TYPE[eventType] || 'moderation_reward';
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const eventResult = await client.query(
+                `
+                    SELECT
+                        pe.event_id AS "eventId",
+                        pe.user_id AS "userId",
+                        pe.event_type AS "eventType",
+                        pe.points,
+                        pe.status,
+                        pe.document_id AS "documentId",
+                        pe.qa_session_id AS "qaSessionId",
+                        pe.source_user_id AS "sourceUserId",
+                        pe.metadata
+                    FROM point_events pe
+                    WHERE pe.event_id = $1
+                    FOR UPDATE;
+                `,
+                [eventId]
+            );
+            const pointEvent = eventResult.rows[0] || null;
+
+            if (!pointEvent) {
+                const error = new Error('Q&A rating event not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            if (String(pointEvent.eventType || '').toLowerCase() !== eventType) {
+                const error = new Error('Only Q&A rating point events can be deleted here.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            let revertedPoints = 0;
+            let userPointsAfter = null;
+            const approvedPoints = Number(pointEvent.points || 0);
+            if (String(pointEvent.status || '').toLowerCase() === 'approved' && approvedPoints !== 0) {
+                const pointDelta = -approvedPoints;
+                const pointCheck = await client.query(
+                    `SELECT points FROM users WHERE user_id = $1 FOR UPDATE;`,
+                    [pointEvent.userId]
+                );
+                const currentPoints = pointCheck.rows[0]?.points;
+                if (typeof currentPoints !== 'number') {
+                    const error = new Error('User for Q&A rating event not found.');
+                    error.statusCode = 404;
+                    throw error;
+                }
+                if (currentPoints + pointDelta < 0) {
+                    const error = new Error(
+                        `Insufficient points for deduction. Current points: ${currentPoints}, requested delta: ${pointDelta}.`
+                    );
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                const balance = await client.query(
+                    `
+                        UPDATE users
+                        SET points = points + $2, updated_at = NOW()
+                        WHERE user_id = $1
+                        RETURNING points AS "userPointsAfter";
+                    `,
+                    [pointEvent.userId, pointDelta]
+                );
+                userPointsAfter = balance.rows[0]?.userPointsAfter ?? null;
+                revertedPoints = approvedPoints;
+
+                await client.query(
+                    `
+                        INSERT INTO point_transactions (
+                            user_id, transaction_type, points, description, document_id, answer_id, review_id
+                        )
+                        VALUES ($1, $2, $3, $4, $5, NULL, NULL);
+                    `,
+                    [
+                        pointEvent.userId,
+                        transactionType,
+                        pointDelta,
+                        `Q&A rating reward reverted because event #${pointEvent.eventId} was deleted.`,
+                        pointEvent.documentId,
+                    ]
+                );
+            } else {
+                const balance = await client.query(
+                    `SELECT points AS "userPointsAfter" FROM users WHERE user_id = $1;`,
+                    [pointEvent.userId]
+                );
+                userPointsAfter = balance.rows[0]?.userPointsAfter ?? null;
+            }
+
+            const ratingDeleteResult = await client.query(
+                `
+                    DELETE FROM session_ratings
+                    WHERE session_id = $1
+                      AND owner_user_id = $2
+                      AND ($3::INT IS NULL OR asker_user_id = $3)
+                    RETURNING rating_id AS "ratingId";
+                `,
+                [
+                    pointEvent.qaSessionId,
+                    pointEvent.userId,
+                    pointEvent.sourceUserId || null,
+                ]
+            );
+
+            await client.query(`DELETE FROM point_events WHERE event_id = $1;`, [eventId]);
+            await client.query('COMMIT');
+
+            return {
+                ...pointEvent,
+                deletedByUserId,
+                deleteNote,
+                deletedRatingIds: (ratingDeleteResult.rows || []).map((row) => row.ratingId),
+                revertedPoints,
+                userPointsAfter,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+        const eventRequest = new sql.Request(transaction);
+        eventRequest.input('eventId', sql.Int, eventId);
+        const eventResult = await eventRequest.query(`
+            SELECT TOP 1
+                pe.eventId,
+                pe.userId,
+                pe.eventType,
+                pe.points,
+                pe.status,
+                pe.documentId,
+                pe.qaSessionId,
+                pe.sourceUserId,
+                pe.metadata
+            FROM dbo.PointEvents pe WITH (UPDLOCK, HOLDLOCK)
+            WHERE pe.eventId = @eventId;
+        `);
+        const pointEvent = eventResult.recordset[0] || null;
+
+        if (!pointEvent) {
+            const error = new Error('Q&A rating event not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (String(pointEvent.eventType || '').toLowerCase() !== eventType) {
+            const error = new Error('Only Q&A rating point events can be deleted here.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        let revertedPoints = 0;
+        let userPointsAfter = null;
+        const approvedPoints = Number(pointEvent.points || 0);
+        if (String(pointEvent.status || '').toLowerCase() === 'approved' && approvedPoints !== 0) {
+            const pointDelta = -approvedPoints;
+            const pointCheckRequest = new sql.Request(transaction);
+            pointCheckRequest.input('userId', sql.Int, pointEvent.userId);
+            const pointCheck = await pointCheckRequest.query(`
+                SELECT points
+                FROM dbo.Users WITH (UPDLOCK, ROWLOCK)
+                WHERE userId = @userId;
+            `);
+            const currentPoints = pointCheck.recordset[0]?.points;
+            if (typeof currentPoints !== 'number') {
+                const error = new Error('User for Q&A rating event not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+            if (currentPoints + pointDelta < 0) {
+                const error = new Error(
+                    `Insufficient points for deduction. Current points: ${currentPoints}, requested delta: ${pointDelta}.`
+                );
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const rewardRequest = new sql.Request(transaction);
+            rewardRequest.input('userId', sql.Int, pointEvent.userId);
+            rewardRequest.input('pointDelta', sql.Int, pointDelta);
+            rewardRequest.input('transactionType', sql.NVarChar(50), transactionType);
+            rewardRequest.input(
+                'description',
+                sql.NVarChar(255),
+                `Q&A rating reward reverted because event #${pointEvent.eventId} was deleted.`
+            );
+            rewardRequest.input('documentId', sql.Int, pointEvent.documentId);
+            const rewardResult = await rewardRequest.query(`
+                UPDATE dbo.Users
+                SET points = points + @pointDelta, updatedAt = SYSDATETIME()
+                WHERE userId = @userId;
+
+                INSERT INTO dbo.PointTransactions (
+                    userId, transactionType, points, description, documentId, answerId, reviewId
+                )
+                VALUES (@userId, @transactionType, @pointDelta, @description, @documentId, NULL, NULL);
+
+                SELECT points AS userPointsAfter
+                FROM dbo.Users
+                WHERE userId = @userId;
+            `);
+            userPointsAfter = rewardResult.recordset[0]?.userPointsAfter ?? null;
+            revertedPoints = approvedPoints;
+        } else {
+            const balanceRequest = new sql.Request(transaction);
+            balanceRequest.input('userId', sql.Int, pointEvent.userId);
+            const balanceResult = await balanceRequest.query(`
+                SELECT points AS userPointsAfter
+                FROM dbo.Users
+                WHERE userId = @userId;
+            `);
+            userPointsAfter = balanceResult.recordset[0]?.userPointsAfter ?? null;
+        }
+
+        const ratingDeleteRequest = new sql.Request(transaction);
+        ratingDeleteRequest.input('sessionId', sql.Int, pointEvent.qaSessionId);
+        ratingDeleteRequest.input('ownerUserId', sql.Int, pointEvent.userId);
+        ratingDeleteRequest.input('sourceUserId', sql.Int, pointEvent.sourceUserId || null);
+        const ratingDeleteResult = await ratingDeleteRequest.query(`
+            DELETE FROM dbo.SessionRatings
+            OUTPUT DELETED.ratingId
+            WHERE sessionId = @sessionId
+              AND ownerUserId = @ownerUserId
+              AND (@sourceUserId IS NULL OR askerUserId = @sourceUserId);
+        `);
+
+        const deleteEventRequest = new sql.Request(transaction);
+        deleteEventRequest.input('eventId', sql.Int, eventId);
+        await deleteEventRequest.query(`DELETE FROM dbo.PointEvents WHERE eventId = @eventId;`);
+
+        await transaction.commit();
+
+        return {
+            ...pointEvent,
+            deletedByUserId,
+            deleteNote,
+            deletedRatingIds: (ratingDeleteResult.recordset || []).map((row) => row.ratingId),
+            revertedPoints,
+            userPointsAfter,
+        };
+    } catch (error) {
+        if (transaction._aborted !== true) {
+            await transaction.rollback();
+        }
+        throw error;
+    }
 };
 
 const reviewPointEvent = async ({
@@ -742,6 +1610,10 @@ const reviewPointEvent = async ({
 module.exports = {
     EVENT_TYPES,
     createPointEvent,
+    awardUploadSubmittedPoints,
+    revertUploadSubmittedPointsForRejectedDocument,
     getPendingPointEvents,
+    getReviewedQaRatingEvents,
+    deleteQaRatingEvent,
     reviewPointEvent,
 };

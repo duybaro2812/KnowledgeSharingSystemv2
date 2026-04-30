@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const path = require('path');
 const documentModel = require('../models/document.model');
 const categoryModel = require('../models/category.model');
 const reportModel = require('../models/report.model');
@@ -30,6 +31,38 @@ const {
 } = require('../services/document-preview.service');
 
 const getFileHashFromBuffer = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+
+const MIME_EXTENSION_BY_TYPE = {
+    'application/pdf': '.pdf',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.ms-powerpoint': '.ppt',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'text/plain': '.txt',
+};
+
+const inferFileExtension = ({ originalFileName, mimeType }) => {
+    const explicitExtension = path.extname(String(originalFileName || '')).toLowerCase();
+    if (explicitExtension) return explicitExtension;
+    return MIME_EXTENSION_BY_TYPE[String(mimeType || '').toLowerCase()] || '';
+};
+
+const buildDocumentFileNameFromTitle = ({ title, originalFileName, mimeType }) => {
+    const extension = inferFileExtension({ originalFileName, mimeType });
+    const safeBaseName = String(title || originalFileName || 'document')
+        .replace(/[\\/:*?"<>|]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || 'document';
+
+    if (extension && safeBaseName.toLowerCase().endsWith(extension.toLowerCase())) {
+        return safeBaseName.slice(0, 255);
+    }
+
+    const maxBaseLength = Math.max(1, 255 - extension.length);
+    return `${safeBaseName.slice(0, maxBaseLength).trim() || 'document'}${extension}`;
+};
 
 const normalizeDocumentTitle = (value) =>
     normalizeRequiredText({
@@ -356,6 +389,68 @@ const buildPlagiarismNotificationPayload = ({
     };
 };
 
+const runPostUploadProcessing = async ({
+    documentId,
+    fileUrl,
+    originalFileName,
+    mimeType,
+    title,
+    description,
+    buffer,
+}) => {
+    let extractedDocumentText = null;
+
+    try {
+        await buildViewerPreparationPayload({
+            documentId,
+            fileUrl,
+            originalFileName,
+            mimeType,
+            title,
+            buffer,
+            forcePrepare: true,
+        });
+    } catch (viewerError) {
+        console.error('Failed to prepare document viewer after upload:', viewerError.message);
+    }
+
+    try {
+        extractedDocumentText = await buildAndStoreDocumentTextArtifact({
+            documentId,
+            buffer,
+            originalFileName,
+            mimeType,
+            title,
+            description,
+        });
+    } catch (extractError) {
+        console.error('Failed to extract document text after upload:', extractError.message);
+    }
+
+    try {
+        const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
+
+        if (plagiarismCheck.candidateCount > 0) {
+            const plagiarismNotification = buildPlagiarismNotificationPayload({
+                documentId,
+                documentTitle: title,
+                plagiarismCheck,
+                extractionWarning: extractedDocumentText?.extractionWarning || null,
+                source: 'upload',
+            });
+
+            await notifyModerationTeam({
+                type: 'plagiarism_suspected',
+                title: plagiarismNotification.title,
+                message: plagiarismNotification.message,
+                metadata: plagiarismNotification.metadata,
+            });
+        }
+    } catch (plagiarismError) {
+        console.error('Failed to check plagiarism after upload:', plagiarismError.message);
+    }
+};
+
 const applyDocumentReviewDecision = async ({
     documentId,
     moderatorUserId,
@@ -401,6 +496,17 @@ const applyDocumentReviewDecision = async ({
 
     if (decision === DOCUMENT_STATUSES.REJECTED) {
         try {
+            responseData.uploadSubmissionRewardReversal =
+                await pointEventModel.revertUploadSubmittedPointsForRejectedDocument({
+                    documentId,
+                    reviewedByUserId: moderatorUserId,
+                    reviewNote: note || 'Document rejected.',
+                });
+        } catch (pointEventError) {
+            console.error('Failed to revert upload_submitted point reward:', pointEventError.message);
+        }
+
+        try {
             await notificationModel.createNotification({
                 userId: updatedDocument.ownerUserId,
                 type: rejectionNotificationType,
@@ -430,7 +536,7 @@ const applyDocumentReviewDecision = async ({
     }
 
     try {
-        await pointEventModel.createPointEvent({
+        const uploadApprovedEvent = await pointEventModel.createPointEvent({
             userId: updatedDocument.ownerUserId,
             eventType: pointEventModel.EVENT_TYPES.UPLOAD_APPROVED,
             points: POINT_POLICY.rewards.uploadApproved,
@@ -440,8 +546,17 @@ const applyDocumentReviewDecision = async ({
                 moderatorUserId,
             },
         });
+        if (uploadApprovedEvent?.eventId) {
+            responseData.uploadApprovalReward = await pointEventModel.reviewPointEvent({
+                eventId: uploadApprovedEvent.eventId,
+                reviewedByUserId: moderatorUserId,
+                decision: 'approved',
+                reviewNote: note || 'Document approved by moderator/admin.',
+                pointDeltaOverride: POINT_POLICY.rewards.uploadApproved,
+            });
+        }
     } catch (pointEventError) {
-        console.error('Failed to create upload_approved point event:', pointEventError.message);
+        console.error('Failed to approve upload_approved point reward:', pointEventError.message);
     }
 
     try {
@@ -451,7 +566,7 @@ const applyDocumentReviewDecision = async ({
             title: approvalNotificationTitle,
             message:
                 approvalNotificationMessage ||
-                `Your document "${updatedDocument.title}" has been approved by moderator.`,
+                `Your document "${updatedDocument.title}" has been approved. ${POINT_POLICY.rewards.uploadApproved} points were added to your account.`,
             metadata: {
                 ...buildDocumentOwnerNotificationMetadata({
                     documentId,
@@ -556,13 +671,18 @@ const createDocument = async (req, res, next) => {
 
         const fileUrl = cloudUploadResult.secure_url || cloudUploadResult.url;
         const fileHash = getFileHashFromBuffer(req.file.buffer);
+        const uploadedDisplayFileName = buildDocumentFileNameFromTitle({
+            title,
+            originalFileName: req.file.originalname,
+            mimeType: req.file.mimetype,
+        });
 
         const documentId = await documentModel.createDocument({
             ownerUserId: req.user.userId,
             title,
             description,
             fileUrl,
-            originalFileName: req.file.originalname,
+            originalFileName: uploadedDisplayFileName,
             fileSizeBytes: req.file.size,
             mimeType: req.file.mimetype,
             fileHash,
@@ -570,75 +690,61 @@ const createDocument = async (req, res, next) => {
         });
 
         const document = await documentModel.getDocumentDetailById(documentId);
-        const viewerPreparation = await buildViewerPreparationPayload({
+        const uploadReward = await pointEventModel.awardUploadSubmittedPoints({
+            userId: req.user.userId,
+            points: POINT_POLICY.rewards.uploadSubmitted,
             documentId,
-            fileUrl,
-            originalFileName: req.file.originalname,
-            mimeType: req.file.mimetype,
-            title,
-            buffer: req.file.buffer,
-            forcePrepare: true,
+            metadata: {
+                source: 'document_upload',
+                title,
+            },
         });
-
-        const extractedDocumentText = await buildAndStoreDocumentTextArtifact({
-            documentId,
-            buffer: req.file.buffer,
-            originalFileName: req.file.originalname,
-            mimeType: req.file.mimetype,
-            title,
-            description,
-        });
-
-        const plagiarismCheck = await checkDocumentPlagiarismInternal(documentId);
-
-        if (plagiarismCheck.candidateCount > 0) {
-            try {
-                const plagiarismNotification = buildPlagiarismNotificationPayload({
-                    documentId,
-                    documentTitle: title,
-                    plagiarismCheck,
-                    extractionWarning: extractedDocumentText.extractionWarning || null,
-                    source: 'upload',
-                });
-
-                await notifyModerationTeam({
-                    type: 'plagiarism_suspected',
-                    title: plagiarismNotification.title,
-                    message: plagiarismNotification.message,
-                    metadata: plagiarismNotification.metadata,
-                });
-            } catch (notifyError) {
-                console.error('Failed to notify moderation team for plagiarism check:', notifyError.message);
-            }
-        }
 
         try {
-            await pointEventModel.createPointEvent({
-                userId: req.user.userId,
-                eventType: pointEventModel.EVENT_TYPES.UPLOAD_SUBMITTED,
-                points: POINT_POLICY.rewards.uploadSubmitted,
-                documentId,
-                metadata: {
-                    source: 'document_upload',
-                    title,
-                },
+            await notifyModerationTeam({
+                type: 'document_moderation_pending_review',
+                title: 'New document pending review',
+                message: `${req.user.name || req.user.username || 'A user'} uploaded "${title}" and is waiting for moderation.`,
+                metadata: buildModerationQueueNotificationMetadata({
+                    documentId,
+                    action: 'document.pending_review',
+                    extra: {
+                        route: `/moderation?queue=documents&documentId=${documentId}`,
+                        documentTitle: title,
+                        ownerUserId: req.user.userId,
+                    },
+                }),
             });
-        } catch (pointEventError) {
-            console.error('Failed to create upload_submitted point event:', pointEventError.message);
+        } catch (notifyError) {
+            console.error('Failed to notify moderation team for uploaded document:', notifyError.message);
         }
+
+        const backgroundBuffer = Buffer.from(req.file.buffer);
+        setImmediate(() => {
+            runPostUploadProcessing({
+                documentId,
+                fileUrl,
+                originalFileName: uploadedDisplayFileName,
+                mimeType: req.file.mimetype,
+                title,
+                description,
+                buffer: backgroundBuffer,
+            }).catch((processingError) => {
+                console.error('Unexpected post-upload processing error:', processingError.message);
+            });
+        });
 
         res.status(201).json({
             success: true,
-            message: 'Document created successfully.',
+            message: 'Document uploaded successfully. 10 points were awarded immediately.',
             data: {
                 ...document,
-                plagiarismCheck,
-                extraction: {
-                    method: extractedDocumentText.extractionMethod,
-                    tokenCount: extractedDocumentText.tokenCount,
-                    warning: extractedDocumentText.extractionWarning || null,
+                uploadReward,
+                processing: {
+                    viewerPreparation: 'queued',
+                    textExtraction: 'queued',
+                    plagiarismCheck: 'queued',
                 },
-                viewerPreparation,
             },
         });
     } catch (error) {
@@ -785,7 +891,11 @@ const updateDocument = async (req, res, next) => {
             });
 
             fileUrl = cloudUploadResult.secure_url || cloudUploadResult.url;
-            originalFileName = req.file.originalname;
+            originalFileName = buildDocumentFileNameFromTitle({
+                title,
+                originalFileName: req.file.originalname,
+                mimeType: req.file.mimetype,
+            });
             fileSizeBytes = req.file.size;
             mimeType = req.file.mimetype;
             fileHash = getFileHashFromBuffer(req.file.buffer);
@@ -793,10 +903,16 @@ const updateDocument = async (req, res, next) => {
             await buildAndStoreDocumentTextArtifact({
                 documentId,
                 buffer: req.file.buffer,
-                originalFileName: req.file.originalname,
+                originalFileName,
                 mimeType: req.file.mimetype,
                 title,
                 description,
+            });
+        } else {
+            originalFileName = buildDocumentFileNameFromTitle({
+                title,
+                originalFileName: existingDocument.originalFileName,
+                mimeType,
             });
         }
 

@@ -1,3 +1,11 @@
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+
+function UploadModalPortal({ children }) {
+  if (typeof document === "undefined") return null;
+  return createPortal(children, document.body);
+}
+
 function UploadArrowIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -53,13 +61,35 @@ function CheckIcon() {
 function UploadTabView(props) {
   const { model, controller } = props;
   const selectedFileName = model.uploadForm.file?.name || "";
+  const [isUploadSuccessOpen, setIsUploadSuccessOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isUploadSuccessOpen || typeof document === "undefined") return undefined;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousDocumentOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousDocumentOverflow;
+    };
+  }, [isUploadSuccessOpen]);
+
+  const handleSubmit = async (event) => {
+    const wasUploaded = await controller.onSubmit(event);
+    if (wasUploaded) {
+      setIsUploadSuccessOpen(true);
+    }
+  };
 
   return (
     <section className="upload-page">
       <div className="upload-page-head">
         <div>
           <h2>Upload Document</h2>
-          <p>Share your study materials and earn 10 points after submission review.</p>
+          <p>Share your study materials and earn 10 points immediately after upload.</p>
         </div>
         <div className="upload-points-pill">
           <LightningIcon />
@@ -69,7 +99,7 @@ function UploadTabView(props) {
 
       <form
         className={`upload-page-form ${model.isUploadSubmitting ? "is-submitting" : ""}`}
-        onSubmit={controller.onSubmit}
+        onSubmit={handleSubmit}
         aria-busy={model.isUploadSubmitting}
       >
         <label className="upload-dropzone">
@@ -91,7 +121,7 @@ function UploadTabView(props) {
         <section className="upload-form-card">
           <div className="upload-form-grid">
             <div className="upload-form-group upload-form-group-full">
-              <label htmlFor="upload-title">Document Title *</label>
+              <label htmlFor="upload-title">Document Title / Download File Name *</label>
               <input
                 id="upload-title"
                 placeholder="e.g. Advanced Algorithms & Complexity Theory - Full Notes"
@@ -99,6 +129,9 @@ function UploadTabView(props) {
                 disabled={model.isUploadSubmitting}
                 onChange={(e) => controller.onChangeTitle(e.target.value)}
               />
+              <small className="upload-field-hint">
+                Document Title chính là tên file khi người dùng tải xuống.
+              </small>
             </div>
 
             <div className="upload-form-group upload-form-group-full">
@@ -225,6 +258,50 @@ function UploadTabView(props) {
           {model.isUploadSubmitting ? "Submitting..." : "Submit for Review"}
         </button>
       </form>
+
+      {isUploadSuccessOpen && (
+        <UploadModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal download-confirm-modal download-success-modal">
+              <div className="download-confirm-head report-modal-head">
+                <div>
+                  <h3>Upload thành công</h3>
+                  <p className="report-modal-sub">Tài liệu đã được gửi vào hàng chờ duyệt.</p>
+                </div>
+                <button
+                  type="button"
+                  className="report-close-btn"
+                  aria-label="Đóng thông báo"
+                  onClick={() => setIsUploadSuccessOpen(false)}
+                >
+                  X
+                </button>
+              </div>
+              <div className="download-success-body">
+                <span className="download-success-icon" aria-hidden="true">
+                  ✓
+                </span>
+                <div>
+                  <strong>Bạn đã được cộng 10 điểm.</strong>
+                  <p>
+                    Tài liệu hiện ở trạng thái pending. Moderator hoặc admin sẽ chấm và cộng thêm điểm khi duyệt;
+                    nếu tài liệu bị từ chối, 10 điểm upload ban đầu sẽ được thu hồi.
+                  </p>
+                </div>
+              </div>
+              <div className="download-confirm-actions report-modal-actions">
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => setIsUploadSuccessOpen(false)}
+                >
+                  Xác nhận
+                </button>
+              </div>
+            </div>
+          </div>
+        </UploadModalPortal>
+      )}
     </section>
   );
 }

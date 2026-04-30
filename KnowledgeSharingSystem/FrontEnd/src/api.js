@@ -12,12 +12,16 @@ const toQueryString = (query = {}) => {
   return params.toString();
 };
 
-export const apiRequest = async (path, { method = 'GET', token, body, isForm = false, query } = {}) => {
+export const apiRequest = async (
+  path,
+  { method = 'GET', token, body, isForm = false, query, timeoutMs = API_TIMEOUT_MS } = {},
+) => {
   const qs = toQueryString(query);
   const url = `${API_BASE_URL}${path}${qs ? `?${qs}` : ''}`;
   const headers = {};
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const requestTimeoutMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : API_TIMEOUT_MS;
+  const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
 
   if (token) headers.Authorization = `Bearer ${token}`;
   if (!isForm && body !== undefined) headers['Content-Type'] = 'application/json';
@@ -36,7 +40,7 @@ export const apiRequest = async (path, { method = 'GET', token, body, isForm = f
   } catch (error) {
     clearTimeout(timeoutId);
     if (error?.name === 'AbortError') {
-      throw new Error(`Request timeout (${API_TIMEOUT_MS}ms): ${url}`);
+      throw new Error(`Request timeout (${requestTimeoutMs}ms): ${url}`);
     }
     throw new Error(`Cannot connect API: ${url}`);
   }

@@ -33,6 +33,7 @@ export function createUploadFeature(ctx) {
     loadMyDocuments,
     loadPendingDocuments,
     loadCategories,
+    refreshCurrentUser,
   } = ctx;
 
   const selectCourse = (name) => {
@@ -77,46 +78,66 @@ export function createUploadFeature(ctx) {
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (isUploadSubmitting) return;
+    if (isUploadSubmitting) return false;
 
     setIsUploadSubmitting(true);
-    await call(async () => {
-      setStatus("Submitting document... Please wait while we process your file.");
-      setError("");
+    try {
+      return await call(async () => {
+        setStatus("Submitting document... Please wait while we process your file.");
+        setError("");
 
-      const names = parseCategoryNames(uploadForm.categoryNames || courseInput);
-      if (!names.length) throw new Error("Please input at least one course name.");
-      const fd = new FormData();
-      fd.append("title", uploadForm.title);
-      fd.append("description", uploadForm.description);
-      fd.append("categoryNames", names.join(","));
-      if (uploadForm.file) fd.append("documentFile", uploadForm.file);
+        const names = parseCategoryNames(uploadForm.categoryNames || courseInput);
+        if (!names.length) throw new Error("Please input at least one course name.");
+        const fd = new FormData();
+        fd.append("title", uploadForm.title);
+        fd.append("description", uploadForm.description);
+        fd.append("categoryNames", names.join(","));
+        if (uploadForm.file) fd.append("documentFile", uploadForm.file);
 
-      await apiRequest("/documents", { method: "POST", token, body: fd, isForm: true });
-      setStatus("Upload successful. Document is pending review.");
-      setError("");
-      setUploadForm({ title: "", description: "", categoryNames: "", file: null });
-      setSelectedTags([]);
-      setCourseInput("");
-      setShowCourseDropdown(false);
-      setTagInput("");
-      await loadMyDocuments();
-      if (isModerator) {
-        await loadPendingDocuments();
-      }
-      await loadCategories();
-
-      if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
-        window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
-      }
-      if (typeof document !== "undefined") {
-        const contentPane = document.querySelector(".content");
-        if (contentPane && typeof contentPane.scrollTo === "function") {
-          contentPane.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        await apiRequest("/documents", {
+          method: "POST",
+          token,
+          body: fd,
+          isForm: true,
+          timeoutMs: 90000,
+        });
+        setStatus("Upload successful. +10 points awarded. Document is pending review.");
+        setError("");
+        setUploadForm({ title: "", description: "", categoryNames: "", file: null });
+        setSelectedTags([]);
+        setCourseInput("");
+        setShowCourseDropdown(false);
+        setTagInput("");
+        if (refreshCurrentUser) {
+          await refreshCurrentUser().catch((refreshError) => {
+            console.warn("Failed to refresh current user after upload:", refreshError?.message || refreshError);
+          });
         }
-      }
-    }, { actionKey: "upload:submit" });
-    setIsUploadSubmitting(false);
+        await loadMyDocuments().catch((loadError) => {
+          console.warn("Failed to reload my documents after upload:", loadError?.message || loadError);
+        });
+        if (isModerator) {
+          await loadPendingDocuments().catch((loadError) => {
+            console.warn("Failed to reload pending documents after upload:", loadError?.message || loadError);
+          });
+        }
+        await loadCategories().catch((loadError) => {
+          console.warn("Failed to reload categories after upload:", loadError?.message || loadError);
+        });
+
+        if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
+          window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        }
+        if (typeof document !== "undefined") {
+          const contentPane = document.querySelector(".content");
+          if (contentPane && typeof contentPane.scrollTo === "function") {
+            contentPane.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+          }
+        }
+      }, { actionKey: "upload:submit" });
+    } finally {
+      setIsUploadSubmitting(false);
+    }
   };
 
   return {

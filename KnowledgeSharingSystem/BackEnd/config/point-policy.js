@@ -41,7 +41,7 @@ const getSuggestedPointsByStars = (stars) => {
 
 const buildPointPolicyResponse = () => ({
     ...POINT_POLICY,
-    note: 'Point events are applied after moderator/admin review based on platform policy.',
+    note: 'Upload submissions award 10 points immediately. Moderator/admin review can add approved-upload points later; rejected uploads revert the initial 10 points.',
 });
 
 module.exports = {

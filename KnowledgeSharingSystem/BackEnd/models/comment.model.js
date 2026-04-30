@@ -61,7 +61,7 @@ const getCommentsByDocumentId = async ({
                         )
                         OR (
                             $4::TEXT IN ('moderator', 'admin')
-                            AND c.status IN ('pending', 'rejected')
+                            AND c.status IN ('pending', 'rejected', 'hidden')
                         )
                   )
                   AND (
@@ -132,7 +132,7 @@ const getCommentsByDocumentId = async ({
                     )
                     OR (
                         @viewerRole IN (N'moderator', N'admin')
-                        AND c.status IN (N'pending', N'rejected')
+                        AND c.status IN (N'pending', N'rejected', N'hidden')
                     )
               )
               AND (
@@ -399,6 +399,330 @@ const updateCommentStatus = async ({ commentId, status }) => {
     return result.recordset[0]?.affectedRows || 0;
 };
 
+const restoreHiddenComment = async ({ commentId, reviewerUserId }) => {
+    const pool = getPool();
+
+    if (isPostgresClient()) {
+        const result = await pool.query(
+            `
+                UPDATE comments
+                SET
+                    status = 'approved',
+                    reviewed_by_user_id = $2,
+                    review_note = NULL,
+                    reviewed_at = NOW(),
+                    updated_at = NOW()
+                WHERE comment_id = $1
+                  AND status = 'hidden';
+            `,
+            [commentId, reviewerUserId]
+        );
+        return Number(result.rowCount || 0);
+    }
+
+    const result = await pool
+        .request()
+        .input('commentId', sql.Int, commentId)
+        .input('reviewerUserId', sql.Int, reviewerUserId)
+        .query(`
+            UPDATE dbo.Comments
+            SET
+                status = N'approved',
+                reviewedByUserId = @reviewerUserId,
+                reviewNote = NULL,
+                reviewedAt = SYSDATETIME(),
+                updatedAt = SYSDATETIME()
+            WHERE commentId = @commentId
+              AND status = N'hidden';
+
+            SELECT @@ROWCOUNT AS affectedRows;
+        `);
+
+    return result.recordset[0]?.affectedRows || 0;
+};
+
+const deleteHiddenCommentForModeration = async ({
+    commentId,
+    moderatorUserId,
+    reason,
+    penaltyPoints = 0,
+}) => {
+    const pool = getPool();
+    const safePenalty = Number.isInteger(Number(penaltyPoints)) ? Math.max(0, Number(penaltyPoints)) : 0;
+    const safeReason = String(reason || '').trim();
+    const penaltyDescription = `Penalty for deleted comment #${commentId}: ${safeReason}`.slice(0, 255);
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const existingResult = await client.query(
+                `
+                    SELECT
+                        c.comment_id AS "commentId",
+                        c.document_id AS "documentId",
+                        c.author_user_id AS "authorUserId",
+                        c.content,
+                        c.status,
+                        u.points AS "authorPoints"
+                    FROM comments c
+                    INNER JOIN users u ON u.user_id = c.author_user_id
+                    WHERE c.comment_id = $1
+                    FOR UPDATE OF c;
+                `,
+                [commentId]
+            );
+            const existingComment = existingResult.rows[0];
+
+            if (!existingComment) {
+                const error = new Error('Comment not found.');
+                error.statusCode = 404;
+                throw error;
+            }
+
+            if (String(existingComment.status || '').toLowerCase() !== 'hidden') {
+                const error = new Error('Only hidden comments can be permanently deleted by moderation.');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const targetResult = await client.query(
+                `
+                    WITH RECURSIVE target_comments AS (
+                        SELECT comment_id
+                        FROM comments
+                        WHERE comment_id = $1
+                        UNION ALL
+                        SELECT c.comment_id
+                        FROM comments c
+                        INNER JOIN target_comments tc ON tc.comment_id = c.parent_comment_id
+                    )
+                    SELECT COALESCE(ARRAY_AGG(comment_id), ARRAY[]::INTEGER[]) AS "commentIds"
+                    FROM target_comments;
+                `,
+                [commentId]
+            );
+            const commentIds = targetResult.rows[0]?.commentIds || [commentId];
+
+            let deductedPoints = 0;
+            if (safePenalty > 0) {
+                const pointsResult = await client.query(
+                    `SELECT points FROM users WHERE user_id = $1 FOR UPDATE;`,
+                    [existingComment.authorUserId]
+                );
+                const currentPoints = Number(pointsResult.rows[0]?.points || 0);
+                deductedPoints = Math.min(currentPoints, safePenalty);
+
+                if (deductedPoints > 0) {
+                    await client.query(
+                        `
+                            UPDATE users
+                            SET
+                                points = points - $2,
+                                updated_at = NOW()
+                            WHERE user_id = $1;
+                        `,
+                        [existingComment.authorUserId, deductedPoints]
+                    );
+
+                    await client.query(
+                        `
+                            INSERT INTO point_transactions (
+                                user_id, transaction_type, points, description, document_id, answer_id, review_id
+                            )
+                            VALUES ($1, 'penalty', $2, $3, $4, NULL, NULL);
+                        `,
+                        [
+                            existingComment.authorUserId,
+                            -deductedPoints,
+                            penaltyDescription,
+                            existingComment.documentId,
+                        ]
+                    );
+                }
+            }
+
+            await client.query(`DELETE FROM reports WHERE comment_id = ANY($1::INTEGER[]);`, [commentIds]);
+            await client.query(`DELETE FROM hidden_knowledge_sources WHERE comment_id = ANY($1::INTEGER[]);`, [commentIds]);
+            await client.query(`DELETE FROM point_events WHERE comment_id = ANY($1::INTEGER[]);`, [commentIds]);
+            await client.query(`UPDATE comments SET parent_comment_id = NULL WHERE comment_id = ANY($1::INTEGER[]);`, [commentIds]);
+            await client.query(`DELETE FROM comments WHERE comment_id = ANY($1::INTEGER[]);`, [commentIds]);
+
+            await client.query(
+                `
+                    INSERT INTO user_activity_logs (user_id, action, target_type, target_id)
+                    VALUES ($1, 'delete_comment_moderation', 'comment', $2);
+                `,
+                [moderatorUserId, commentId]
+            );
+
+            await client.query('COMMIT');
+            return {
+                commentId,
+                documentId: existingComment.documentId,
+                authorUserId: existingComment.authorUserId,
+                content: existingComment.content,
+                deletedCommentIds: commentIds,
+                deductedPoints,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const result = await pool
+        .request()
+        .input('commentId', sql.Int, commentId)
+        .input('moderatorUserId', sql.Int, moderatorUserId)
+        .input('reason', sql.NVarChar(255), safeReason)
+        .input('penaltyDescription', sql.NVarChar(255), penaltyDescription)
+        .input('penaltyPoints', sql.Int, safePenalty)
+        .query(`
+            BEGIN TRY
+                BEGIN TRANSACTION;
+
+                DECLARE @documentId INT;
+                DECLARE @authorUserId INT;
+                DECLARE @content NVARCHAR(MAX);
+                DECLARE @status NVARCHAR(20);
+                DECLARE @deletedCommentIds NVARCHAR(MAX);
+                DECLARE @deductedPoints INT = 0;
+                DECLARE @targetComments TABLE (commentId INT PRIMARY KEY);
+
+                SELECT
+                    @documentId = c.documentId,
+                    @authorUserId = c.authorUserId,
+                    @content = c.content,
+                    @status = c.status
+                FROM dbo.Comments c WITH (UPDLOCK, HOLDLOCK)
+                WHERE c.commentId = @commentId;
+
+                IF @documentId IS NULL
+                BEGIN
+                    THROW 57110, N'Comment not found.', 1;
+                END;
+
+                IF @status <> N'hidden'
+                BEGIN
+                    THROW 57111, N'Only hidden comments can be permanently deleted by moderation.', 1;
+                END;
+
+                ;WITH targetComments AS (
+                    SELECT commentId
+                    FROM dbo.Comments
+                    WHERE commentId = @commentId
+                    UNION ALL
+                    SELECT c.commentId
+                    FROM dbo.Comments c
+                    INNER JOIN targetComments tc ON tc.commentId = c.parentCommentId
+                )
+                INSERT INTO @targetComments (commentId)
+                SELECT commentId
+                FROM targetComments;
+
+                IF @penaltyPoints > 0
+                BEGIN
+                    SELECT @deductedPoints =
+                        CASE
+                            WHEN u.points >= @penaltyPoints THEN @penaltyPoints
+                            ELSE u.points
+                        END
+                    FROM dbo.Users u WITH (UPDLOCK, HOLDLOCK)
+                    WHERE u.userId = @authorUserId;
+
+                    IF @deductedPoints > 0
+                    BEGIN
+                        UPDATE dbo.Users
+                        SET
+                            points = points - @deductedPoints,
+                            updatedAt = SYSDATETIME()
+                        WHERE userId = @authorUserId;
+
+                        INSERT INTO dbo.PointTransactions (
+                            userId,
+                            transactionType,
+                            points,
+                            description,
+                            documentId,
+                            answerId,
+                            reviewId
+                        )
+                        VALUES (
+                            @authorUserId,
+                            N'penalty',
+                            -@deductedPoints,
+                            @penaltyDescription,
+                            @documentId,
+                            NULL,
+                            NULL
+                        );
+                    END;
+                END;
+
+                DELETE r
+                FROM dbo.Reports r
+                WHERE EXISTS (SELECT 1 FROM @targetComments tc WHERE tc.commentId = r.commentId);
+
+                DELETE hks
+                FROM dbo.HiddenKnowledgeSources hks
+                WHERE EXISTS (SELECT 1 FROM @targetComments tc WHERE tc.commentId = hks.commentId);
+
+                DELETE pe
+                FROM dbo.PointEvents pe
+                WHERE EXISTS (SELECT 1 FROM @targetComments tc WHERE tc.commentId = pe.commentId);
+
+                UPDATE c
+                SET parentCommentId = NULL
+                FROM dbo.Comments c
+                WHERE EXISTS (SELECT 1 FROM @targetComments tc WHERE tc.commentId = c.commentId);
+
+                DELETE c
+                FROM dbo.Comments c
+                WHERE EXISTS (SELECT 1 FROM @targetComments tc WHERE tc.commentId = c.commentId);
+
+                SELECT @deletedCommentIds = STRING_AGG(CAST(commentId AS NVARCHAR(20)), N',')
+                FROM @targetComments;
+
+                INSERT INTO dbo.UserActivityLogs (userId, action, targetType, targetId)
+                VALUES (@moderatorUserId, N'delete_comment_moderation', N'comment', @commentId);
+
+                COMMIT TRANSACTION;
+
+                SELECT
+                    @commentId AS commentId,
+                    @documentId AS documentId,
+                    @authorUserId AS authorUserId,
+                    @content AS content,
+                    @deductedPoints AS deductedPoints,
+                    @deletedCommentIds AS deletedCommentIds;
+            END TRY
+            BEGIN CATCH
+                IF @@TRANCOUNT > 0
+                BEGIN
+                    ROLLBACK TRANSACTION;
+                END;
+                THROW;
+            END CATCH;
+        `);
+
+    const row = result.recordset[0];
+    return {
+        commentId,
+        documentId: row?.documentId,
+        authorUserId: row?.authorUserId,
+        content: row?.content,
+        deductedPoints: Number(row?.deductedPoints || 0),
+        deletedCommentIds: String(row?.deletedCommentIds || '')
+            .split(',')
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value) && value > 0),
+    };
+};
+
 const getDocumentOwnerForComments = async (documentId) => {
     const pool = getPool();
 
@@ -656,6 +980,8 @@ module.exports = {
     createComment,
     createReplyComment,
     updateCommentStatus,
+    restoreHiddenComment,
+    deleteHiddenCommentForModeration,
     getDocumentOwnerForComments,
     getCommentParticipantUserIds,
     countRecentCommentsByUser,

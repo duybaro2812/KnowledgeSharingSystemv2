@@ -162,12 +162,13 @@ const createComment = async (req, res, next) => {
                     authorUserId: req.user.userId,
                     status: 'approved',
                     pointEventIds: pendingPointEventIds,
+                    pointEventId: pendingPointEventIds[0] || null,
                     action: 'point.pending_from_comment',
                     target: {
                         type: 'comment',
                         id: commentId,
                     },
-                    route: `/moderation?documentId=${documentId}&commentId=${commentId}`,
+                    route: `/documents/${documentId}?commentId=${commentId}`,
                 },
             });
         } catch (notifyError) {
@@ -286,17 +287,19 @@ const createReplyComment = async (req, res, next) => {
                 message: `${actorLabel(req.user)} posted a reply in "${documentInfo?.documentTitle || 'document'}".`,
                 metadata: {
                     documentId: createdReply.documentId,
+                    commentId,
                     parentCommentId,
                     replyCommentId: commentId,
                     authorUserId: req.user.userId,
                     status: 'approved',
                     pointEventIds: pendingPointEventIds,
+                    pointEventId: pendingPointEventIds[0] || null,
                     action: 'point.pending_from_comment',
                     target: {
                         type: 'comment',
                         id: commentId,
                     },
-                    route: `/moderation?documentId=${createdReply.documentId}&commentId=${commentId}`,
+                    route: `/documents/${createdReply.documentId}?commentId=${commentId}`,
                 },
             });
         } catch (notifyError) {
@@ -521,12 +524,13 @@ const reviewComment = async (req, res, next) => {
                             documentId: reviewedComment.documentId,
                             commentId,
                             pointEventIds: pendingPointEventIds,
+                            pointEventId: pendingPointEventIds[0] || null,
                             action: 'point.pending_from_comment',
                             target: {
-                                type: 'moderation_queue',
+                                type: 'comment',
                                 id: commentId,
                             },
-                            route: `/moderation?documentId=${reviewedComment.documentId}&commentId=${commentId}`,
+                            route: `/documents/${reviewedComment.documentId}?commentId=${commentId}`,
                         },
                     });
                 } else if (commenterPointEvent?.eventId) {
@@ -538,12 +542,13 @@ const reviewComment = async (req, res, next) => {
                             documentId: reviewedComment.documentId,
                             commentId,
                             pointEventIds: pendingPointEventIds,
+                            pointEventId: pendingPointEventIds[0] || null,
                             action: 'point.pending_from_comment',
                             target: {
-                                type: 'moderation_queue',
+                                type: 'comment',
                                 id: commentId,
                             },
-                            route: `/moderation?documentId=${reviewedComment.documentId}&commentId=${commentId}`,
+                            route: `/documents/${reviewedComment.documentId}?commentId=${commentId}`,
                         },
                     });
                 }
@@ -608,6 +613,144 @@ const hideComment = async (req, res, next) => {
             success: true,
             message: 'Comment hidden successfully.',
             data: updatedComment,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const restoreHiddenComment = async (req, res, next) => {
+    try {
+        const commentId = Number(req.params.id);
+
+        if (!Number.isInteger(commentId) || commentId <= 0) {
+            const error = new Error('A valid comment id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const existingComment = await commentModel.getCommentById(commentId);
+
+        if (!existingComment) {
+            const error = new Error('Comment not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (String(existingComment.status || '').toLowerCase() !== 'hidden') {
+            const error = new Error('Only hidden comments can be restored.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const affectedRows = await commentModel.restoreHiddenComment({
+            commentId,
+            reviewerUserId: req.user.userId,
+        });
+
+        if (!affectedRows) {
+            const error = new Error('Comment could not be restored.');
+            error.statusCode = 409;
+            throw error;
+        }
+
+        const updatedComment = await commentModel.getCommentById(commentId);
+
+        try {
+            await notifyUserIfDifferent({
+                actorUserId: req.user.userId,
+                receiverUserId: existingComment.authorUserId,
+                type: 'comment_restored',
+                title: 'Comment restored',
+                message: `Your comment #${commentId} has been restored by moderation.`,
+                metadata: {
+                    documentId: existingComment.documentId,
+                    commentId,
+                    moderatorUserId: req.user.userId,
+                    action: 'comment.restored',
+                    target: {
+                        type: 'comment',
+                        id: commentId,
+                    },
+                    route: `/documents/${existingComment.documentId}?commentId=${commentId}`,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to notify comment author after restore:', notifyError.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Comment restored successfully.',
+            data: updatedComment,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deleteHiddenCommentForModeration = async (req, res, next) => {
+    try {
+        const commentId = Number(req.params.id);
+        const reason = normalizeRequiredText({
+            value: req.body?.reason,
+            fieldName: 'Delete reason',
+            maxLength: VALIDATION_RULES.comment.moderationNoteMax,
+        });
+        const penaltyPoints = Number(req.body?.penaltyPoints ?? 0);
+
+        if (!Number.isInteger(commentId) || commentId <= 0) {
+            const error = new Error('A valid comment id is required.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (!Number.isInteger(penaltyPoints) || penaltyPoints < 0 || penaltyPoints > 15) {
+            const error = new Error('Penalty points must be an integer from 0 to 15.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const result = await commentModel.deleteHiddenCommentForModeration({
+            commentId,
+            moderatorUserId: req.user.userId,
+            reason,
+            penaltyPoints,
+        });
+
+        try {
+            const penaltyText = result.deductedPoints > 0
+                ? ` ${result.deductedPoints} point(s) were deducted.`
+                : '';
+            await notifyUserIfDifferent({
+                actorUserId: req.user.userId,
+                receiverUserId: result.authorUserId,
+                type: 'comment_deleted',
+                title: 'Comment deleted',
+                message: `Your comment #${commentId} was deleted by moderation. Reason: ${reason}.${penaltyText}`,
+                metadata: {
+                    documentId: result.documentId,
+                    commentId,
+                    deletedCommentIds: result.deletedCommentIds,
+                    moderatorUserId: req.user.userId,
+                    reason,
+                    penaltyPoints: result.deductedPoints,
+                    action: 'comment.deleted',
+                    target: {
+                        type: 'document',
+                        id: result.documentId,
+                    },
+                    route: `/documents/${result.documentId}`,
+                },
+            });
+        } catch (notifyError) {
+            console.error('Failed to notify comment author after delete:', notifyError.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Comment deleted successfully.',
+            data: result,
         });
     } catch (error) {
         next(error);
@@ -691,12 +834,13 @@ const ensureCommentPointEvents = async (req, res, next) => {
                     documentId: comment.documentId,
                     commentId,
                     pointEventIds: pendingPointEventIds,
+                    pointEventId: pendingPointEventIds[0] || null,
                     action: 'point.pending_from_comment',
                     target: {
                         type: 'comment',
                         id: commentId,
                     },
-                    route: `/moderation?documentId=${comment.documentId}&commentId=${commentId}`,
+                    route: `/documents/${comment.documentId}?commentId=${commentId}`,
                 },
             });
         } catch (notifyError) {
@@ -770,6 +914,8 @@ module.exports = {
     getPendingCommentsForModeration,
     reviewComment,
     hideComment,
+    restoreHiddenComment,
+    deleteHiddenCommentForModeration,
     ensureCommentPointEvents,
     deleteComment,
 };
