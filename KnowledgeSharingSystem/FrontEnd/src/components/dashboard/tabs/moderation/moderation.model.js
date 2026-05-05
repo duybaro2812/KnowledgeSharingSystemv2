@@ -93,6 +93,7 @@ export function createModerationModel(input) {
       : "documents",
     pendingDocs: Array.isArray(input.pendingDocs) ? input.pendingDocs : [],
     reportedDocs: Array.isArray(input.reportedDocs) ? input.reportedDocs : [],
+    adminDocuments: Array.isArray(input.adminDocuments) ? input.adminDocuments : [],
     pendingPointEvents,
     reviewedQaRatingEvents,
     pendingComments,

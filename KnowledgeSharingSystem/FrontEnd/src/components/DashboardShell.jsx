@@ -8,6 +8,7 @@ import ModerationTab from "./dashboard/tabs/ModerationTab";
 import MyDocumentsTab from "./dashboard/tabs/MyDocumentsTab";
 import MyLibraryTab from "./dashboard/tabs/MyLibraryTab";
 import NotificationsTab from "./dashboard/tabs/NotificationsTab";
+import PointPolicyTab from "./dashboard/tabs/PointPolicyTab";
 import PointsTab from "./dashboard/tabs/PointsTab";
 import ProfileTab from "./dashboard/tabs/ProfileTab";
 import QaTab from "./dashboard/tabs/QaTab";
@@ -15,7 +16,6 @@ import SearchTab from "./dashboard/tabs/SearchTab";
 import SettingsTab from "./dashboard/tabs/SettingsTab";
 import UploadTab from "./dashboard/tabs/UploadTab";
 import UsersTab from "./dashboard/tabs/UsersTab";
-import DocumentsTab from "./dashboard/tabs/DocumentsTab";
 
 function DashboardShell(props) {
   const {
@@ -123,9 +123,9 @@ function DashboardShell(props) {
           {activeTab === "upload" && <UploadTab {...props} />}
           {activeTab === "moderation" && <ModerationTab {...props} />}
           {activeTab === "users" && <UsersTab {...props} />}
-          {activeTab === "documents" && <DocumentsTab {...props} />}
           {activeTab === "notifications" && <NotificationsTab {...props} />}
           {activeTab === "points" && <PointsTab {...props} />}
+          {activeTab === "point-policy" && <PointPolicyTab {...props} />}
           {activeTab === "categories" && <CategoriesTab {...props} />}
           {(activeTab === "reader" || previewDoc) && (
             <PreviewPanel

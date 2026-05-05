@@ -385,11 +385,21 @@ const getUploadedDocuments = async ({ ownerUserId = null, status = null }) => {
                     d.owner_user_id AS "ownerUserId",
                     u.name AS "ownerName",
                     u.email AS "ownerEmail",
+                    category_summary.category_names AS "categoryNames",
+                    category_summary.category_ids AS "categoryIds",
                     latest_review.decision AS "latestReviewDecision",
                     latest_review.note AS "latestReviewNote",
                     latest_review.created_at AS "latestReviewedAt"
                 FROM documents d
                 INNER JOIN users u ON u.user_id = d.owner_user_id
+                LEFT JOIN LATERAL (
+                    SELECT
+                        STRING_AGG(c.name, ', ' ORDER BY c.name) AS category_names,
+                        STRING_AGG(c.category_id::TEXT, ', ' ORDER BY c.category_id) AS category_ids
+                    FROM document_categories dc
+                    INNER JOIN categories c ON c.category_id = dc.category_id
+                    WHERE dc.document_id = d.document_id
+                ) category_summary ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT dr.decision, dr.note, dr.created_at
                     FROM document_reviews dr
@@ -427,11 +437,21 @@ const getUploadedDocuments = async ({ ownerUserId = null, status = null }) => {
             d.ownerUserId,
             u.name AS ownerName,
             u.email AS ownerEmail,
+            categorySummary.categoryNames,
+            categorySummary.categoryIds,
             latestReview.decision AS latestReviewDecision,
             latestReview.note AS latestReviewNote,
             latestReview.createdAt AS latestReviewedAt
         FROM dbo.Documents d
         INNER JOIN dbo.Users u ON u.userId = d.ownerUserId
+        OUTER APPLY (
+            SELECT
+                STRING_AGG(CONVERT(NVARCHAR(MAX), c.name), N', ') AS categoryNames,
+                STRING_AGG(CONVERT(NVARCHAR(MAX), c.categoryId), N', ') AS categoryIds
+            FROM dbo.DocumentCategories dc
+            INNER JOIN dbo.Categories c ON c.categoryId = dc.categoryId
+            WHERE dc.documentId = d.documentId
+        ) categorySummary
         OUTER APPLY (
             SELECT TOP 1
                 dr.decision,

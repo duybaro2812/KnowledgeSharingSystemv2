@@ -7,11 +7,13 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
+    "test": "jest",
     "start": "node index.js",
     "dev": "nodemon index.js",
     "debug": "nodemon --inspect index.js",
     "db:pg:schema": "node scripts/apply-postgres-schema.js",
-    "db:pg:hidden-knowledge": "node scripts/apply-postgres-migration.js sql/postgres/002_hidden_knowledge.sql"
+    "db:pg:hidden-knowledge": "node scripts/apply-postgres-migration.js sql/postgres/002_hidden_knowledge.sql",
+    "db:pg:point-policy": "node scripts/apply-postgres-migration.js sql/postgres/003_point_policy_settings.sql"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -27,8 +29,8 @@
     "pg": "^8.20.0",
     "ws": "^8.18.3"
   },
-  "optionalDependencies": {},
   "devDependencies": {
+    "jest": "^30.3.0",
     "nodemon": "^3.1.14"
   }
 }

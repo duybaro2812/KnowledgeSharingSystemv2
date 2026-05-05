@@ -18,6 +18,8 @@ export function createUsersModel(input) {
     users,
     currentUserId: Number(input.user?.userId || 0),
     moderationStats,
+    auditLogs: Array.isArray(input.moderationTimeline) ? input.moderationTimeline : [],
+    pointPolicy: input.pointPolicy || null,
     adminDashboard: {
       totalUsers: Number(moderationStats?.totalUsers ?? users.length),
       activeUsers: Number(moderationStats?.activeUsers ?? activeUsers),

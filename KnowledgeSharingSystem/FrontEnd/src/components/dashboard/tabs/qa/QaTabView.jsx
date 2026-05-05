@@ -435,19 +435,38 @@ function QaTabView({ model, controller }) {
             className="qa-composer"
             onSubmit={(event) => {
               event.preventDefault();
-              void handleSendMessage();
             }}
           >
             <div className="qa-composer-row">
               <textarea
                 value={draftMessage}
                 onChange={(event) => setDraftMessage(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey) return;
+                  if (event.nativeEvent?.isComposing) return;
+                  event.preventDefault();
+                  void handleSendMessage();
+                }}
                 placeholder="Type your message..."
                 maxLength={2000}
                 disabled={model.isBusy}
               />
-              <button type="submit" className="qa-send-btn" disabled={model.isBusy || !draftMessage.trim()}>
-                Send
+              <button
+                type="button"
+                className="qa-send-btn"
+                aria-label="Send message"
+                title="Send message"
+                disabled={model.isBusy || !draftMessage.trim()}
+                onClick={() => {
+                  void handleSendMessage();
+                }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M21.8 3.7 18.3 20c-.2.9-1.2 1.2-1.9.7l-5.1-3.8-2.5 2.4c-.5.5-1.4.2-1.4-.6v-3.8L2.6 13c-.9-.3-.9-1.6 0-2L20.2 2.4c.9-.4 1.8.4 1.6 1.3Z"
+                    fill="currentColor"
+                  />
+                </svg>
               </button>
             </div>
           </form>

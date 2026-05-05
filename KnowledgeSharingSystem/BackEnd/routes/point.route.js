@@ -12,6 +12,20 @@ router.get(
     pointLedgerController.getPointPolicy
 );
 
+router.patch(
+    '/policy',
+    authMiddleware,
+    roleMiddleware('admin'),
+    pointLedgerController.updatePointPolicy
+);
+
+router.delete(
+    '/policy/:settingKey',
+    authMiddleware,
+    roleMiddleware('admin'),
+    pointLedgerController.deletePointPolicySetting
+);
+
 router.get(
     '/me/summary',
     authMiddleware,

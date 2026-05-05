@@ -1,71 +1,201 @@
+import { useState } from "react";
+
+function CategoryIcon({ name = "folder" }) {
+  const common = {
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": "true",
+    focusable: "false",
+  };
+
+  const paths = {
+    folder: (
+      <>
+        <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
+      </>
+    ),
+    plus: (
+      <>
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </>
+    ),
+    edit: (
+      <>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </>
+    ),
+    trash: (
+      <>
+        <path d="M3 6h18" />
+        <path d="M8 6V4h8v2" />
+        <path d="m19 6-1 14H6L5 6" />
+      </>
+    ),
+    toggleOn: (
+      <>
+        <rect x="2" y="7" width="20" height="10" rx="5" />
+        <circle cx="16" cy="12" r="3" />
+      </>
+    ),
+    book: (
+      <>
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+        <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5Z" />
+      </>
+    ),
+    chevron: <path d="m9 18 6-6-6-6" />,
+  };
+
+  return (
+    <svg className="admin-icon" {...common}>
+      {paths[name] || paths.folder}
+    </svg>
+  );
+}
+
+function slugify(value) {
+  return String(value || "course").trim().toLowerCase().replace(/\s+/g, "-");
+}
+
 function CategoriesTabView(props) {
   const { model, controller } = props;
+  const [addOpen, setAddOpen] = useState(false);
+  const palette = ["#2563EB", "#0D9488", "#7C3AED", "#EA580C", "#059669", "#DC2626"];
+
   if (!model.isModerator) {
     return (
-      <section className="panel">
-        <h2>Courses</h2>
-        <p className="hint">Only moderator/admin can manage courses.</p>
+      <section className="admin-page">
+        <div className="admin-page-head">
+          <div>
+            <h2>Category Management</h2>
+            <p>Only moderator/admin can manage courses.</p>
+          </div>
+        </div>
       </section>
     );
   }
 
   return (
-    <section className="panel">
-      <h2>Course manager</h2>
-      <form className="filters" onSubmit={controller.onSubmitCreateCategory}>
-        <input
-          placeholder="New course name"
-          value={model.newCategoryForm.name}
-          onChange={(e) => controller.onChangeCategoryName(e.target.value)}
-        />
-        <input
-          placeholder="Description"
-          value={model.newCategoryForm.description}
-          onChange={(e) => controller.onChangeCategoryDescription(e.target.value)}
-        />
-        <button>Create course</button>
-      </form>
-      <div className="cards-grid compact">
-        {model.categories.map((c) => (
-          <button
-            key={c.categoryId}
-            type="button"
-            className={`cat-card cat-card-btn ${
-              model.selectedCategory?.categoryId === c.categoryId ? "active" : ""
-            }`}
-            onClick={() => controller.onSelectCategory(c)}
-            title={`Show documents in ${c.name}`}
-          >
-            <h3>{c.name}</h3>
-            <p>Course ID #{c.categoryId}</p>
-          </button>
-        ))}
+    <section className="admin-page">
+      <div className="admin-page-head">
+        <div>
+          <h2>
+            <CategoryIcon />
+            Category Management
+          </h2>
+          <p>{model.categories.length} categories configured</p>
+        </div>
+        <button type="button" className="admin-primary-btn" onClick={() => setAddOpen((value) => !value)}>
+          <CategoryIcon name="plus" />
+          New Category
+        </button>
       </div>
+
+      {addOpen && (
+        <form className="admin-create-card" onSubmit={controller.onSubmitCreateCategory}>
+          <h3>New Category</h3>
+          <div className="admin-create-grid">
+            <label>
+              <span>Name</span>
+              <input
+                placeholder="e.g. Engineering"
+                value={model.newCategoryForm.name}
+                onChange={(event) => controller.onChangeCategoryName(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Description</span>
+              <input
+                placeholder="Brief description of this category"
+                value={model.newCategoryForm.description}
+                onChange={(event) => controller.onChangeCategoryDescription(event.target.value)}
+              />
+            </label>
+          </div>
+          <div className="admin-create-actions">
+            <button type="button" onClick={() => setAddOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="admin-primary-btn">
+              Create Category
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div className="admin-category-grid">
+        {model.categories.map((category, index) => {
+          const color = palette[index % palette.length];
+          const isActive = Number(model.selectedCategory?.categoryId || 0) === Number(category.categoryId || 0);
+          return (
+            <article key={category.categoryId} className={`admin-category-card ${isActive ? "active" : ""}`}>
+              <button type="button" className="admin-category-main" onClick={() => controller.onSelectCategory(category)}>
+                <span className="admin-category-icon" style={{ color, backgroundColor: `${color}18`, borderColor: `${color}30` }}>
+                  <CategoryIcon />
+                </span>
+                <span className="admin-category-copy">
+                  <strong>{category.name}</strong>
+                  <small>{category.description || `Course ID #${category.categoryId}`}</small>
+                  <em>
+                    <CategoryIcon name="book" />
+                    {Number(category.documentCount || 0)} documents - /{slugify(category.name)}
+                  </em>
+                </span>
+                <CategoryIcon name="chevron" />
+              </button>
+              <div className="admin-category-actions">
+                <button type="button" title="Edit category" disabled>
+                  <CategoryIcon name="edit" />
+                </button>
+                <button type="button" className="success" title="Active category" disabled>
+                  <CategoryIcon name="toggleOn" />
+                </button>
+                <button type="button" title="Delete category" disabled>
+                  <CategoryIcon name="trash" />
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
       {model.selectedCategory && (
-        <div className="category-docs">
-          <h3>Documents in course "{model.selectedCategory.name}"</h3>
+        <section className="admin-table-card compact">
+          <div className="admin-table-head">
+            <div>
+              <h3>Documents in "{model.selectedCategory.name}"</h3>
+              <p>{model.categoryDocs.length} approved documents</p>
+            </div>
+          </div>
           {model.categoryDocs.length === 0 ? (
             <p className="hint">No approved documents in this course yet.</p>
           ) : (
-            <ul className="list">
-              {model.categoryDocs.map((d) => (
-                <li key={d.documentId}>
-                  <span>
-                      #{d.documentId} - {d.title}
+            <div className="admin-log-list">
+              {model.categoryDocs.map((doc) => (
+                <article key={doc.documentId}>
+                  <span className="admin-log-icon">
+                    <CategoryIcon name="book" />
                   </span>
-                  <span className="list-actions">
-                    <button type="button" onClick={() => controller.onPreviewDoc(d)}>
-                      Preview
+                  <div>
+                    <button type="button" className="admin-inline-link" onClick={() => controller.onPreviewDoc(doc)}>
+                      {doc.title}
                     </button>
-                    <a href={controller.resolveUrl(d.fileUrl)} target="_blank" rel="noreferrer">
-                      Open file
-                    </a>
-                  </span>
-                </li>
+                    <p>Document #{doc.documentId}</p>
+                  </div>
+                  <a href={controller.resolveUrl(doc.fileUrl)} target="_blank" rel="noreferrer">
+                    Open file
+                  </a>
+                </article>
               ))}
-            </ul>
+            </div>
           )}
-        </div>
+        </section>
       )}
     </section>
   );

@@ -92,6 +92,14 @@ export function createModerationController(input) {
       if (!ensureModerator() || !input.onAddHiddenKnowledgeFromQaRating) return;
       return input.onAddHiddenKnowledgeFromQaRating(event);
     },
+    onOpenDocumentExperience: async (documentId) => {
+      if (!ensureModerator() || !input.onOpenHiddenKnowledge) return null;
+      return input.onOpenHiddenKnowledge(documentId);
+    },
+    onSaveDocumentExperience: async (documentId, body) => {
+      if (!ensureModerator() || !input.onSaveHiddenKnowledge) return null;
+      return input.onSaveHiddenKnowledge(documentId, body);
+    },
     onRefreshOverview: () => ensureModerator() && input.loadModerationOverview(),
   };
 }

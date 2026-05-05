@@ -324,11 +324,12 @@ const createReplyComment = async (req, res, next) => {
     }
 };
 
-const getPendingCommentsForModeration = async (req, res, next) => {
+const getCommentsForModeration = async (req, res, next) => {
     try {
         const limit = req.query.limit ? Number(req.query.limit) : 100;
         const offset = req.query.offset ? Number(req.query.offset) : 0;
         const documentId = req.query.documentId ? Number(req.query.documentId) : null;
+        const status = req.query.status ? String(req.query.status).toLowerCase() : null;
 
         if (!Number.isInteger(limit) || limit <= 0) {
             const error = new Error('limit must be a positive integer.');
@@ -348,20 +349,32 @@ const getPendingCommentsForModeration = async (req, res, next) => {
             throw error;
         }
 
-        const comments = await commentModel.getPendingCommentsForModeration({
+        if (status !== null && !['pending', 'approved', 'rejected', 'hidden'].includes(status)) {
+            const error = new Error('status must be one of: pending, approved, rejected, hidden.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const comments = await commentModel.getCommentsForModeration({
             limit,
             offset,
             documentId,
+            status,
         });
 
         res.json({
             success: true,
-            message: 'Pending comments fetched successfully.',
+            message: 'Moderation comments fetched successfully.',
             data: comments,
         });
     } catch (error) {
         next(error);
     }
+};
+
+const getPendingCommentsForModeration = async (req, res, next) => {
+    req.query.status = 'pending';
+    return getCommentsForModeration(req, res, next);
 };
 
 const reviewComment = async (req, res, next) => {
@@ -911,6 +924,7 @@ module.exports = {
     getDocumentComments,
     createComment,
     createReplyComment,
+    getCommentsForModeration,
     getPendingCommentsForModeration,
     reviewComment,
     hideComment,

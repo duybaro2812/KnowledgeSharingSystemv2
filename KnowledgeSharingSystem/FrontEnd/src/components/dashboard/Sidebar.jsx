@@ -192,9 +192,10 @@ function Sidebar(props) {
       ]
     : [
         { key: "home", label: "Home", icon: <HomeIcon /> },
-        { key: "points", label: "Points", icon: <PointsIcon /> },
+        isAdminRole
+          ? { key: "point-policy", label: "Points Policy", icon: <PointsIcon /> }
+          : { key: "points", label: "Points", icon: <PointsIcon /> },
         { key: "moderation", label: isAdminRole ? "Admin queue" : "Moderation queue", icon: <RecentIcon /> },
-        { key: "documents", label: "Documents", icon: <LibraryIcon /> },
         ...(isAdminRole ? [{ key: "users", label: "Users", icon: <QaIcon /> }] : []),
         { key: "categories", label: "Courses", icon: <LibraryIcon /> },
       ];

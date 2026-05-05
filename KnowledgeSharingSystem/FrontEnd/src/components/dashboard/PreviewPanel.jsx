@@ -9,6 +9,17 @@ function ModalPortal({ children }) {
   return createPortal(children, document.body);
 }
 
+function PaperPlaneIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M21.8 3.7 18.3 20c-.2.9-1.2 1.2-1.9.7l-5.1-3.8-2.5 2.4c-.5.5-1.4.2-1.4-.6v-3.8L2.6 13c-.9-.3-.9-1.6 0-2L20.2 2.4c.9-.4 1.8.4 1.6 1.3Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 function LimitedPdfPreview({ fileUrl, pageLimit = 5, totalPages = null, lockOverlayContent = null }) {
   const hostRef = useRef(null);
   const lockedHostRef = useRef(null);
@@ -876,8 +887,8 @@ function PreviewPanel(props) {
 
         {isReplyOpen && (
           <div className="reply-editor">
-            <input
-              type="text"
+            <textarea
+              rows={2}
               value={replyInput}
               onChange={(e) =>
                 setReplyInputByCommentId((prev) => ({
@@ -888,7 +899,7 @@ function PreviewPanel(props) {
               placeholder="Write a reply..."
               disabled={Boolean(isSubmittingReplyByCommentId[comment.commentId]) || isBusy}
               onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
+                if (e.key !== "Enter" || e.shiftKey) return;
                 if (e.nativeEvent?.isComposing) return;
                 e.preventDefault();
                 void handleCreateReply(comment.commentId);
@@ -896,10 +907,13 @@ function PreviewPanel(props) {
             />
             <button
               type="button"
-              disabled={Boolean(isSubmittingReplyByCommentId[comment.commentId]) || isBusy}
+              className="qa-send-btn comment-send-btn"
+              aria-label="Send reply"
+              title="Send reply"
+              disabled={Boolean(isSubmittingReplyByCommentId[comment.commentId]) || isBusy || !replyInput.trim()}
               onClick={() => handleCreateReply(comment.commentId)}
             >
-              {isSubmittingReplyByCommentId[comment.commentId] ? "Sending..." : "Send"}
+              <PaperPlaneIcon />
             </button>
           </div>
         )}
@@ -1072,14 +1086,14 @@ function PreviewPanel(props) {
       <section className="comments-panel" ref={commentsPanelRef}>
         <h3>Comments</h3>
         <div className="comment-editor">
-          <input
-            type="text"
+          <textarea
+            rows={2}
             value={commentInput}
             onChange={(e) => setCommentInput(e.target.value)}
             placeholder="Write a comment..."
             disabled={isBusy || isSubmittingComment}
             onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
+              if (e.key !== "Enter" || e.shiftKey) return;
               if (e.nativeEvent?.isComposing) return;
               e.preventDefault();
               void handleCreateComment();
@@ -1087,11 +1101,13 @@ function PreviewPanel(props) {
           />
           <button
             type="button"
-            className="primary-btn"
+            className="qa-send-btn comment-send-btn"
+            aria-label="Send comment"
+            title="Send comment"
             disabled={!commentInput.trim() || isBusy || isSubmittingComment}
             onClick={handleCreateComment}
           >
-            {isSubmittingComment ? "Sending..." : "Send"}
+            <PaperPlaneIcon />
           </button>
         </div>
 
@@ -1414,6 +1430,12 @@ function PreviewPanel(props) {
                     className="report-textarea"
                     value={qaMessage}
                     onChange={(e) => setQaMessage(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" || e.shiftKey) return;
+                      if (e.nativeEvent?.isComposing) return;
+                      e.preventDefault();
+                      void handleStartQa();
+                    }}
                     placeholder="Write your first question..."
                     rows={4}
                   />

@@ -6,6 +6,7 @@ const { connectDB } = require('./utils/db');
 const { seedDefaultAdmin } = require('./services/admin-seed.service');
 const { initQaRealtimeServer } = require('./services/qa-realtime.service');
 const { validateEnv } = require('./config/env');
+const pointLedgerModel = require('./models/point-ledger.model');
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -13,6 +14,7 @@ const startServer = async () => {
     try {
         validateEnv();
         await connectDB();
+        await pointLedgerModel.getPointPolicy();
 
         await seedDefaultAdmin();
 

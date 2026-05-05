@@ -266,6 +266,113 @@ const createAccessLog = async ({ documentId, viewerUserId, accessType, pointsCos
         `);
 };
 
+const createLimitedFullViewAccessLog = async ({
+    documentId,
+    viewerUserId,
+    dailyViewLimit,
+    pointsCost = 0,
+}) => {
+    const pool = getPool();
+    const safeDailyViewLimit = Number(dailyViewLimit);
+
+    if (!Number.isInteger(safeDailyViewLimit) || safeDailyViewLimit < 0) {
+        const error = new Error('A valid daily view limit is required.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (isPostgresClient()) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                `
+                    SELECT user_id
+                    FROM users
+                    WHERE user_id = $1
+                    FOR UPDATE;
+                `,
+                [viewerUserId]
+            );
+
+            const countResult = await client.query(
+                `
+                    SELECT COUNT(1)::INT AS total
+                    FROM document_access_logs
+                    WHERE viewer_user_id = $1
+                      AND access_type = 'full_view'
+                      AND access_date = CURRENT_DATE;
+                `,
+                [viewerUserId]
+            );
+            const todayFullViewCount = Number(countResult.rows[0]?.total || 0);
+
+            if (todayFullViewCount >= safeDailyViewLimit) {
+                const error = new Error(
+                    `Bạn đã vượt quá giới hạn ${safeDailyViewLimit} lượt xem tài liệu trong ngày. Vui lòng kiếm thêm điểm để mở khóa xem đầy đủ.`
+                );
+                error.statusCode = 403;
+                error.data = {
+                    dailyViewLimit: safeDailyViewLimit,
+                    todayFullViewCount,
+                    viewsRemainingToday: 0,
+                };
+                throw error;
+            }
+
+            await client.query(
+                `
+                    INSERT INTO document_access_logs (
+                        document_id,
+                        viewer_user_id,
+                        access_type,
+                        points_cost
+                    )
+                    VALUES ($1, $2, 'full_view', $3);
+                `,
+                [documentId, viewerUserId, pointsCost]
+            );
+
+            await client.query('COMMIT');
+            return {
+                todayFullViewCount: todayFullViewCount + 1,
+                viewsRemainingToday: Math.max(0, safeDailyViewLimit - todayFullViewCount - 1),
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    const todayFullViewCount = await getTodayFullViewCount(viewerUserId);
+    if (todayFullViewCount >= safeDailyViewLimit) {
+        const error = new Error(
+            `Bạn đã vượt quá giới hạn ${safeDailyViewLimit} lượt xem tài liệu trong ngày. Vui lòng kiếm thêm điểm để mở khóa xem đầy đủ.`
+        );
+        error.statusCode = 403;
+        error.data = {
+            dailyViewLimit: safeDailyViewLimit,
+            todayFullViewCount,
+            viewsRemainingToday: 0,
+        };
+        throw error;
+    }
+
+    await createAccessLog({
+        documentId,
+        viewerUserId,
+        accessType: 'full_view',
+        pointsCost,
+    });
+
+    return {
+        todayFullViewCount: todayFullViewCount + 1,
+        viewsRemainingToday: Math.max(0, safeDailyViewLimit - todayFullViewCount - 1),
+    };
+};
+
 const chargeDownloadPoints = async ({
     userId,
     documentId,
@@ -524,7 +631,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
             reason:
                 viewsRemainingToday > 0
                     ? null
-                    : `Daily full-view limit reached (${viewLimit}).`,
+                    : `Bạn đã vượt quá giới hạn ${viewLimit} lượt xem tài liệu trong ngày. Vui lòng kiếm thêm điểm để mở khóa xem đầy đủ.`,
         };
     }
 
@@ -566,6 +673,7 @@ module.exports = {
     hasRecentDownloadAccess,
     hasDownloadedDocumentAccess,
     createAccessLog,
+    createLimitedFullViewAccessLog,
     chargeDownloadPoints,
     buildAccessPolicy,
 };

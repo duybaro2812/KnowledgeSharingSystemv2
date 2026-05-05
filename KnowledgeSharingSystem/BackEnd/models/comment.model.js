@@ -823,11 +823,12 @@ const countRecentCommentsByUser = async ({ userId, windowSeconds }) => {
     return Number(result.recordset[0]?.total || 0);
 };
 
-const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, documentId = null }) => {
+const getCommentsForModeration = async ({ limit = 100, offset = 0, documentId = null, status = null }) => {
     const pool = getPool();
 
-    const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 100;
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 100;
     const safeOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
+    const normalizedStatus = status ? String(status).toLowerCase() : null;
 
     if (isPostgresClient()) {
         const result = await pool.query(
@@ -839,6 +840,7 @@ const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, docume
                     c.parent_comment_id AS "parentCommentId",
                     c.author_user_id AS "authorUserId",
                     u.name AS "authorName",
+                    u.email AS "authorEmail",
                     c.content,
                     c.status,
                     c.reviewed_by_user_id AS "reviewedByUserId",
@@ -849,12 +851,14 @@ const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, docume
                 FROM comments c
                 INNER JOIN users u ON u.user_id = c.author_user_id
                 INNER JOIN documents d ON d.document_id = c.document_id
-                WHERE c.status = 'pending'
+                WHERE ($4::TEXT IS NULL OR c.status = $4)
                   AND ($3::INT IS NULL OR c.document_id = $3)
-                ORDER BY c.created_at ASC
+                ORDER BY
+                    CASE WHEN c.status = 'pending' THEN 0 ELSE 1 END,
+                    COALESCE(c.reviewed_at, c.updated_at, c.created_at) DESC
                 LIMIT $1 OFFSET $2;
             `,
-            [safeLimit, safeOffset, documentId]
+            [safeLimit, safeOffset, documentId, normalizedStatus]
         );
         return result.rows;
     }
@@ -864,6 +868,7 @@ const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, docume
         .input('limit', sql.Int, safeLimit)
         .input('offset', sql.Int, safeOffset)
         .input('documentId', sql.Int, documentId)
+        .input('status', sql.NVarChar(20), normalizedStatus)
         .query(`
             SELECT
                 c.commentId,
@@ -872,6 +877,7 @@ const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, docume
                 c.parentCommentId,
                 c.authorUserId,
                 u.name AS authorName,
+                u.email AS authorEmail,
                 c.content,
                 c.status,
                 c.reviewedByUserId,
@@ -882,13 +888,19 @@ const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, docume
             FROM dbo.Comments c
             INNER JOIN dbo.Users u ON u.userId = c.authorUserId
             INNER JOIN dbo.Documents d ON d.documentId = c.documentId
-            WHERE c.status = N'pending'
+            WHERE (@status IS NULL OR c.status = @status)
               AND (@documentId IS NULL OR c.documentId = @documentId)
-            ORDER BY c.createdAt ASC
+            ORDER BY
+                CASE WHEN c.status = N'pending' THEN 0 ELSE 1 END,
+                COALESCE(c.reviewedAt, c.updatedAt, c.createdAt) DESC
             OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
         `);
 
     return result.recordset;
+};
+
+const getPendingCommentsForModeration = async ({ limit = 100, offset = 0, documentId = null }) => {
+    return getCommentsForModeration({ limit, offset, documentId, status: 'pending' });
 };
 
 const reviewCommentStatus = async ({ commentId, decision, reviewerUserId, reviewNote = null }) => {
@@ -985,6 +997,7 @@ module.exports = {
     getDocumentOwnerForComments,
     getCommentParticipantUserIds,
     countRecentCommentsByUser,
+    getCommentsForModeration,
     getPendingCommentsForModeration,
     reviewCommentStatus,
     getCommentRewardTargetUserId,

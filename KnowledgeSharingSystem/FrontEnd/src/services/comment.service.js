@@ -51,7 +51,10 @@ export function createCommentFeature(ctx) {
       return;
     }
 
-    const payload = await apiRequest("/comments/moderation/pending", { token });
+    const payload = await apiRequest("/comments/moderation", {
+      token,
+      query: { limit: 1000 },
+    });
     if (setPendingComments) {
       setPendingComments(Array.isArray(payload.data) ? payload.data : []);
     }
@@ -66,6 +69,7 @@ export function createCommentFeature(ctx) {
       });
       setStatus(payload.message || "Comment reviewed successfully.");
       await loadPendingCommentsForModeration();
+      return payload;
     });
   };
 

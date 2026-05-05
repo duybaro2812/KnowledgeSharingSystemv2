@@ -3,6 +3,69 @@ import { apiRequest } from "../api";
 export function createPointEventFeature(ctx) {
   const { token, call, setStatus, setPendingPointEvents, setReviewedQaRatingEvents } = ctx;
 
+  const collectComments = (items, acc = []) => {
+    if (!Array.isArray(items)) return acc;
+    items.forEach((item) => {
+      if (item) acc.push(item);
+      collectComments(item?.replies, acc);
+    });
+    return acc;
+  };
+
+  const enrichCommentPointEvents = async (events) => {
+    const list = Array.isArray(events) ? events : [];
+    const missingCommentContent = list.filter(
+      (event) => Number(event?.commentId || 0) > 0 && !event?.commentContent,
+    );
+    if (missingCommentContent.length === 0) return list;
+
+    const documentIds = [
+      ...new Set(
+        missingCommentContent
+          .map((event) => Number(event?.documentId || 0))
+          .filter((documentId) => documentId > 0),
+      ),
+    ];
+    if (documentIds.length === 0) return list;
+
+    const commentContentById = {};
+    await Promise.all(
+      documentIds.map(async (documentId) => {
+        try {
+          const payload = await apiRequest(`/documents/${documentId}/comments`, { token });
+          collectComments(payload.data || []).forEach((comment) => {
+            const commentId = Number(comment?.commentId || 0);
+            if (commentId > 0) {
+              commentContentById[commentId] = {
+                content: comment?.content || "",
+                pointEventId: comment?.pointEventId,
+                pointEventStatus: comment?.pointEventStatus,
+                pointEventPoints: comment?.pointEventPoints,
+                pointEventReviewedAt: comment?.pointEventReviewedAt,
+              };
+            }
+          });
+        } catch {
+          // Keep the original point event if the document comments cannot be loaded.
+        }
+      }),
+    );
+
+    return list.map((event) => {
+      const commentId = Number(event?.commentId || 0);
+      const commentInfo = commentContentById[commentId];
+      if (!commentId || !commentInfo) return event;
+      return {
+        ...event,
+        commentContent: event?.commentContent || commentInfo.content,
+        commentPointEventId: commentInfo.pointEventId,
+        commentPointEventStatus: commentInfo.pointEventStatus,
+        commentPointEventPoints: commentInfo.pointEventPoints,
+        commentPointEventReviewedAt: commentInfo.pointEventReviewedAt,
+      };
+    });
+  };
+
   const loadPendingPointEvents = async () => {
     if (!token) {
       setPendingPointEvents([]);
@@ -10,7 +73,7 @@ export function createPointEventFeature(ctx) {
       return;
     }
     const payload = await apiRequest("/points/events/pending", { token });
-    setPendingPointEvents(payload.data || []);
+    setPendingPointEvents(await enrichCommentPointEvents(payload.data || []));
   };
 
   const loadReviewedQaRatingEvents = async () => {
@@ -20,7 +83,7 @@ export function createPointEventFeature(ctx) {
     }
     const payload = await apiRequest("/points/events/qa-ratings/reviewed", {
       token,
-      query: { limit: 50 },
+      query: { limit: 1000 },
     });
     setReviewedQaRatingEvents(payload.data || []);
   };

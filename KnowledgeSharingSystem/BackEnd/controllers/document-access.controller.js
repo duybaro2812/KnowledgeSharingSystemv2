@@ -213,12 +213,20 @@ const registerFullView = async (req, res, next) => {
             throw error;
         }
 
-        await documentAccessModel.createAccessLog({
-            documentId,
-            viewerUserId: req.user.userId,
-            accessType: 'full_view',
-            pointsCost: 0,
-        });
+        const viewLogResult =
+            policy.accessState === 'limited_full'
+                ? await documentAccessModel.createLimitedFullViewAccessLog({
+                    documentId,
+                    viewerUserId: req.user.userId,
+                    dailyViewLimit: policy.dailyViewLimit,
+                    pointsCost: 0,
+                })
+                : await documentAccessModel.createAccessLog({
+                    documentId,
+                    viewerUserId: req.user.userId,
+                    accessType: 'full_view',
+                    pointsCost: 0,
+                });
         const preparedViewer = await documentPreviewService.getPreparedDocumentViewer({
             documentId,
             fileUrl: document.fileUrl,
@@ -246,6 +254,7 @@ const registerFullView = async (req, res, next) => {
                     canFullView: true,
                 }),
                 policy: refreshedPolicy,
+                viewLog: viewLogResult || null,
             },
         });
     } catch (error) {

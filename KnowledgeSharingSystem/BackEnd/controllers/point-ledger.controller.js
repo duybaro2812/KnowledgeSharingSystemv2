@@ -77,10 +77,43 @@ const getMyPointEvents = async (req, res, next) => {
 
 const getPointPolicy = async (req, res, next) => {
     try {
-        const policy = pointLedgerModel.getPointPolicy();
+        const policy = await pointLedgerModel.getPointPolicy();
         res.json({
             success: true,
             message: 'Point policy fetched successfully.',
+            data: policy,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const updatePointPolicy = async (req, res, next) => {
+    try {
+        const policy = await pointLedgerModel.updatePointPolicy({
+            settings: req.body?.settings,
+            updatedByUserId: req.user.userId,
+        });
+
+        res.json({
+            success: true,
+            message: 'Point policy updated successfully.',
+            data: policy,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deletePointPolicySetting = async (req, res, next) => {
+    try {
+        const policy = await pointLedgerModel.deletePointPolicySetting({
+            settingKey: req.params.settingKey,
+        });
+
+        res.json({
+            success: true,
+            message: 'Point policy rule deleted successfully.',
             data: policy,
         });
     } catch (error) {
@@ -93,4 +126,6 @@ module.exports = {
     getMyPointTransactions,
     getMyPointEvents,
     getPointPolicy,
+    updatePointPolicy,
+    deletePointPolicySetting,
 };

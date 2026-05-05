@@ -362,10 +362,9 @@ function AppController() {
       setError("Only admin can access user management.");
       return;
     }
-    if (nextTab === "documents" && !hasModeratorRole(user?.role)) {
-      setStatus("");
-      setError("Only moderator/admin can access documents management.");
-      return;
+    if (nextTab === "documents") {
+      nextTab = "moderation";
+      options = { ...options, queue: "documents" };
     }
 
     const {
@@ -516,8 +515,7 @@ function AppController() {
     if (clear) clearFeedback();
     setPendingActionCount((prev) => prev + 1);
     try {
-      await fn();
-      return true;
+      return await fn();
     } catch (e) {
       const message = e?.message || "Unknown error";
       if (message.toLowerCase().includes("jwt expired")) {
@@ -1131,7 +1129,7 @@ function AppController() {
     setReviewedQaRatingEvents,
   });
 
-  const { loadAllPointData } = createPointsFeature({
+  const { loadAllPointData, updatePointPolicy, deletePointPolicyRule } = createPointsFeature({
     token,
     call,
     user,
@@ -1283,8 +1281,10 @@ function AppController() {
 
   useEffect(() => {
     if (activeTab !== "documents") return;
-    if (hasModeratorRole(user?.role)) return;
-    setActiveTab("home", { replace: true });
+    setActiveTab(hasModeratorRole(user?.role) ? "moderation" : "home", {
+      replace: true,
+      queue: "documents",
+    });
   }, [activeTab, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1364,13 +1364,6 @@ function AppController() {
     if (activeTab !== "users" || !token || user?.role !== "admin") return;
     call(async () => {
       await Promise.all([loadAdminUsers(), loadAllUploadedDocuments(token), loadModerationOverview()]);
-    });
-  }, [activeTab, token, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (activeTab !== "documents" || !token || !hasModeratorRole(user?.role)) return;
-    call(async () => {
-      await Promise.all([loadAllUploadedDocuments(token), loadModerationOverview(), loadPendingDocuments(token)]);
     });
   }, [activeTab, token, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2491,6 +2484,8 @@ function AppController() {
     myPointEvents,
     pointPolicy,
     loadAllPointData,
+    updatePointPolicy,
+    deletePointPolicyRule,
     uploadForm,
     setUploadForm,
     topicPickerRef,

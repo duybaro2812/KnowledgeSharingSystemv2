@@ -759,12 +759,20 @@ const getPendingPointEvents = async () => {
                     pe.comment_id AS "commentId",
                     pe.qa_session_id AS "qaSessionId",
                     pe.source_user_id AS "sourceUserId",
+                    COALESCE(source_user.username, feedback_user.username) AS "sourceUsername",
+                    COALESCE(source_user.name, feedback_user.name) AS "sourceUserName",
+                    COALESCE(source_user.email, feedback_user.email) AS "sourceUserEmail",
                     d.title AS "documentTitle",
+                    c.content AS "commentContent",
                     pe.metadata,
                     pe.created_at AS "createdAt"
                 FROM point_events pe
                 INNER JOIN users u ON u.user_id = pe.user_id
+                LEFT JOIN users source_user ON source_user.user_id = pe.source_user_id
+                LEFT JOIN qa_rating_feedback qrf ON qrf.session_id = pe.qa_session_id
+                LEFT JOIN users feedback_user ON feedback_user.user_id = qrf.user_id
                 LEFT JOIN documents d ON d.document_id = pe.document_id
+                LEFT JOIN comments c ON c.comment_id = pe.comment_id
                 WHERE pe.status = 'pending'
                 ORDER BY pe.created_at ASC, pe.event_id ASC;
             `
@@ -786,12 +794,18 @@ const getPendingPointEvents = async () => {
             pe.commentId,
             pe.qaSessionId,
             pe.sourceUserId,
+            sourceUser.username AS sourceUsername,
+            sourceUser.name AS sourceUserName,
+            sourceUser.email AS sourceUserEmail,
             d.title AS documentTitle,
+            c.content AS commentContent,
             pe.metadata,
             pe.createdAt
         FROM dbo.PointEvents pe
         INNER JOIN dbo.Users u ON u.userId = pe.userId
+        LEFT JOIN dbo.Users sourceUser ON sourceUser.userId = pe.sourceUserId
         LEFT JOIN dbo.Documents d ON d.documentId = pe.documentId
+        LEFT JOIN dbo.Comments c ON c.commentId = pe.commentId
         WHERE pe.status = N'pending'
         ORDER BY pe.createdAt ASC, pe.eventId ASC;
     `);
@@ -803,7 +817,7 @@ const getReviewedQaRatingEvents = async ({ limit = 50 } = {}) => {
     const pool = getPool();
     const parsedLimit = Number(limit);
     const safeLimit = Number.isInteger(parsedLimit)
-        ? Math.min(Math.max(parsedLimit, 1), 100)
+        ? Math.min(Math.max(parsedLimit, 1), 1000)
         : 50;
 
     if (isPostgresClient()) {
@@ -822,6 +836,9 @@ const getReviewedQaRatingEvents = async ({ limit = 50 } = {}) => {
                     pe.comment_id AS "commentId",
                     pe.qa_session_id AS "qaSessionId",
                     pe.source_user_id AS "sourceUserId",
+                    COALESCE(source_user.username, feedback_user.username) AS "sourceUsername",
+                    COALESCE(source_user.name, feedback_user.name) AS "sourceUserName",
+                    COALESCE(source_user.email, feedback_user.email) AS "sourceUserEmail",
                     d.title AS "documentTitle",
                     pe.metadata,
                     pe.created_at AS "createdAt",
@@ -832,6 +849,9 @@ const getReviewedQaRatingEvents = async ({ limit = 50 } = {}) => {
                 FROM point_events pe
                 INNER JOIN users u ON u.user_id = pe.user_id
                 LEFT JOIN users reviewer ON reviewer.user_id = pe.reviewed_by_user_id
+                LEFT JOIN users source_user ON source_user.user_id = pe.source_user_id
+                LEFT JOIN qa_rating_feedback qrf ON qrf.session_id = pe.qa_session_id
+                LEFT JOIN users feedback_user ON feedback_user.user_id = qrf.user_id
                 LEFT JOIN documents d ON d.document_id = pe.document_id
                 WHERE pe.event_type = 'qa_session_rated'
                   AND pe.status = 'approved'
@@ -859,6 +879,9 @@ const getReviewedQaRatingEvents = async ({ limit = 50 } = {}) => {
             pe.commentId,
             pe.qaSessionId,
             pe.sourceUserId,
+            sourceUser.username AS sourceUsername,
+            sourceUser.name AS sourceUserName,
+            sourceUser.email AS sourceUserEmail,
             d.title AS documentTitle,
             pe.metadata,
             pe.createdAt,
@@ -869,6 +892,7 @@ const getReviewedQaRatingEvents = async ({ limit = 50 } = {}) => {
         FROM dbo.PointEvents pe
         INNER JOIN dbo.Users u ON u.userId = pe.userId
         LEFT JOIN dbo.Users reviewer ON reviewer.userId = pe.reviewedByUserId
+        LEFT JOIN dbo.Users sourceUser ON sourceUser.userId = pe.sourceUserId
         LEFT JOIN dbo.Documents d ON d.documentId = pe.documentId
         WHERE pe.eventType = N'qa_session_rated'
           AND pe.status = N'approved'

@@ -1,4 +1,5 @@
 const { getPool } = require('../utils/db');
+const { POINT_POLICY } = require('../config/point-policy');
 
 const MIN_HIDDEN_KNOWLEDGE_POINTS = 61;
 
@@ -102,7 +103,7 @@ const ensureKnowledge = async ({ client, documentId, moderatorUserId }) => {
         [
             documentId,
             `Tong hop kinh nghiem: ${document.title || `Document #${documentId}`}`,
-            MIN_HIDDEN_KNOWLEDGE_POINTS,
+            POINT_POLICY.unlock?.hiddenKnowledgeThreshold || MIN_HIDDEN_KNOWLEDGE_POINTS,
             moderatorUserId,
         ]
     );
@@ -143,11 +144,15 @@ const getHiddenKnowledgeForViewer = async ({ documentId, viewerUserId }) => {
             });
         }
 
-        const requiredPoints = Number(knowledge?.minPointsToView || MIN_HIDDEN_KNOWLEDGE_POINTS);
+        const requiredPoints = Number(
+            POINT_POLICY.unlock?.hiddenKnowledgeThreshold ||
+            knowledge?.minPointsToView ||
+            MIN_HIDDEN_KNOWLEDGE_POINTS
+        );
         const canView = canEdit || Number(viewer.points || 0) >= requiredPoints;
 
         if (!canView) {
-            const error = new Error(`You need more than 60 points to view hidden knowledge.`);
+            const error = new Error(`Bạn cần ít nhất ${requiredPoints} điểm để xem Bài tổng hợp kinh nghiệm của tài liệu.`);
             error.statusCode = 403;
             error.data = {
                 requiredPoints,

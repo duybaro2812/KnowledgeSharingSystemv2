@@ -10,6 +10,12 @@ router.get('/documents/:id/comments', authMiddleware, commentController.getDocum
 router.post('/documents/:id/comments', authMiddleware, commentRateLimiter, commentController.createComment);
 router.post('/comments/:id/replies', authMiddleware, commentRateLimiter, commentController.createReplyComment);
 router.get(
+    '/comments/moderation',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    commentController.getCommentsForModeration
+);
+router.get(
     '/comments/moderation/pending',
     authMiddleware,
     roleMiddleware('admin', 'moderator'),

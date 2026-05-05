@@ -309,6 +309,7 @@ const rateSession = async (req, res, next) => {
             points: suggestedPoints,
             documentId: rated.documentId,
             qaSessionId: rated.sessionId,
+            sourceUserId: rated.askerUserId,
             metadata: {
                 sessionId: rated.sessionId,
                 stars,

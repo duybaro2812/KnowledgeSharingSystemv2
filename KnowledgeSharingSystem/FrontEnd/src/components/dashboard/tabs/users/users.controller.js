@@ -5,6 +5,7 @@ export function createUsersController(input) {
       if (input.loadModerationOverview) tasks.push(input.loadModerationOverview());
       if (input.loadAdminUsers) tasks.push(input.loadAdminUsers());
       if (input.loadAllUploadedDocuments) tasks.push(input.loadAllUploadedDocuments());
+      if (input.loadAllPointData) tasks.push(input.loadAllPointData());
       if (!tasks.length) return;
       await Promise.allSettled(tasks);
     },
@@ -13,5 +14,6 @@ export function createUsersController(input) {
     onLock: (userId) => input.setUserActiveStatus(userId, false),
     onUnlock: (userId) => input.setUserActiveStatus(userId, true),
     onDelete: (userId) => input.deleteUserAccount(userId),
+    onUpdatePointPolicy: (settings) => input.updatePointPolicy(settings),
   };
 }

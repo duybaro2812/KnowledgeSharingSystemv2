@@ -64,6 +64,35 @@ export function createPointsFeature(ctx) {
     setPointPolicy(payload.data || null);
   };
 
+  const updatePointPolicy = async (settings) => {
+    if (!token) return null;
+    let updatedPolicy = null;
+    await call(async () => {
+      const payload = await apiRequest("/points/policy", {
+        method: "PATCH",
+        token,
+        body: { settings },
+      });
+      updatedPolicy = payload.data || null;
+      setPointPolicy(updatedPolicy);
+    });
+    return updatedPolicy;
+  };
+
+  const deletePointPolicyRule = async (settingKey) => {
+    if (!token) return null;
+    let updatedPolicy = null;
+    await call(async () => {
+      const payload = await apiRequest(`/points/policy/${encodeURIComponent(settingKey)}`, {
+        method: "DELETE",
+        token,
+      });
+      updatedPolicy = payload.data || null;
+      setPointPolicy(updatedPolicy);
+    });
+    return updatedPolicy;
+  };
+
   const loadAllPointData = async () => {
     await call(async () => {
       const safeRun = async (fn) => {
@@ -120,6 +149,8 @@ export function createPointsFeature(ctx) {
     loadPointTransactions,
     loadMyPointEvents,
     loadPointPolicy,
+    updatePointPolicy,
+    deletePointPolicyRule,
     loadAllPointData,
   };
 }
