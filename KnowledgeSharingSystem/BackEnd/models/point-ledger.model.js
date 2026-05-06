@@ -214,6 +214,7 @@ const ensurePointPolicySettingsTable = async (client = getPool()) => {
             category VARCHAR(50) NOT NULL DEFAULT 'custom',
             label VARCHAR(120) NULL,
             description VARCHAR(255) NULL,
+            content TEXT NULL,
             unit VARCHAR(40) NULL,
             min_value INTEGER NOT NULL DEFAULT -100000,
             max_value INTEGER NOT NULL DEFAULT 100000,
@@ -223,6 +224,7 @@ const ensurePointPolicySettingsTable = async (client = getPool()) => {
     `);
     await client.query(`ALTER TABLE point_policy_settings ADD COLUMN IF NOT EXISTS category VARCHAR(50) NOT NULL DEFAULT 'custom';`);
     await client.query(`ALTER TABLE point_policy_settings ADD COLUMN IF NOT EXISTS label VARCHAR(120) NULL;`);
+    await client.query(`ALTER TABLE point_policy_settings ADD COLUMN IF NOT EXISTS content TEXT NULL;`);
     await client.query(`ALTER TABLE point_policy_settings ADD COLUMN IF NOT EXISTS unit VARCHAR(40) NULL;`);
     await client.query(`ALTER TABLE point_policy_settings ADD COLUMN IF NOT EXISTS min_value INTEGER NOT NULL DEFAULT -100000;`);
     await client.query(`ALTER TABLE point_policy_settings ADD COLUMN IF NOT EXISTS max_value INTEGER NOT NULL DEFAULT 100000;`);
@@ -312,6 +314,7 @@ const selectPointPolicySettings = async (client = getPool()) => {
             category,
             label,
             description,
+            content,
             unit,
             min_value AS "min",
             max_value AS "max",
@@ -332,6 +335,7 @@ const buildPolicyResponseFromRows = (rows) => {
             category: row.category || 'custom',
             label: row.label || row.settingKey,
             description: row.description || '',
+            content: row.content || '',
             unit: row.unit || 'điểm',
             min: row.min,
             max: row.max,
@@ -346,6 +350,7 @@ const buildPolicyResponseFromRows = (rows) => {
             category: row.category || setting.category,
             label: row.label || setting.label,
             description: row.description || setting.description,
+            content: row.content || setting.content || '',
             unit: row.unit || setting.unit || 'điểm',
             min: Number(row.min ?? setting.min),
             max: Number(row.max ?? setting.max),
@@ -367,6 +372,7 @@ const getPointPolicy = async () => {
             category: row.category,
             label: row.label,
             description: row.description,
+            content: row.content,
             unit: row.unit,
             min: row.min,
             max: row.max,
@@ -391,6 +397,7 @@ const updatePointPolicy = async ({ settings, updatedByUserId }) => {
             category: setting?.category,
             label: setting?.label,
             description: setting?.description,
+            content: setting?.content,
             unit: setting?.unit,
             min: setting?.min,
             max: setting?.max,
@@ -401,6 +408,7 @@ const updatePointPolicy = async ({ settings, updatedByUserId }) => {
             category: definition.category,
             label: definition.label,
             description: definition.description,
+            content: definition.content,
             unit: definition.unit,
             min: definition.min,
             max: definition.max,
@@ -422,19 +430,21 @@ const updatePointPolicy = async ({ settings, updatedByUserId }) => {
                         category,
                         label,
                         description,
+                        content,
                         unit,
                         min_value,
                         max_value,
                         updated_by_user_id,
                         updated_at
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
                     ON CONFLICT (setting_key)
                     DO UPDATE SET
                         setting_value = EXCLUDED.setting_value,
                         category = EXCLUDED.category,
                         label = EXCLUDED.label,
                         description = EXCLUDED.description,
+                        content = EXCLUDED.content,
                         unit = EXCLUDED.unit,
                         min_value = EXCLUDED.min_value,
                         max_value = EXCLUDED.max_value,
@@ -447,6 +457,7 @@ const updatePointPolicy = async ({ settings, updatedByUserId }) => {
                     setting.category,
                     setting.label,
                     setting.description,
+                    setting.content,
                     setting.unit,
                     setting.min,
                     setting.max,
@@ -465,6 +476,7 @@ const updatePointPolicy = async ({ settings, updatedByUserId }) => {
                 category: row.category,
                 label: row.label,
                 description: row.description,
+                content: row.content,
                 unit: row.unit,
                 min: row.min,
                 max: row.max,

@@ -1,4 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+
+function ModalPortal({ children }) {
+  if (typeof document === "undefined") return children;
+  return createPortal(children, document.body);
+}
 
 const toNumber = (value, fallback = 0) => {
   const numeric = Number(value);
@@ -16,6 +22,7 @@ const normalizePolicyRows = (policy) =>
     category: String(setting.category || "custom"),
     label: String(setting.label || setting.key || ""),
     description: String(setting.description || ""),
+    content: String(setting.content || ""),
     value: String(setting.value ?? 0),
     min: Number(setting.min ?? -100000),
     max: Number(setting.max ?? 100000),
@@ -46,9 +53,23 @@ const CATEGORY_LABELS = {
 
 const formatCategory = (value) => CATEGORY_LABELS[value] || value;
 
+const makeEmptyRuleForm = () => ({
+  key: "custom.new_rule",
+  label: "",
+  description: "",
+  content: "",
+  category: "custom",
+  value: "0",
+  min: "-100000",
+  max: "100000",
+  unit: "điểm",
+});
+
 function PointPolicyTab(props) {
   const { pointPolicy, pointSummary, user, updatePointPolicy, deletePointPolicyRule, isBusy } = props;
   const [rows, setRows] = useState(() => normalizePolicyRows(pointPolicy));
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createForm, setCreateForm] = useState(() => makeEmptyRuleForm());
 
   useEffect(() => {
     setRows(normalizePolicyRows(pointPolicy));
@@ -67,24 +88,19 @@ function PointPolicyTab(props) {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
   };
 
-  const addRow = () => {
-    const baseKey = makeCustomPolicyKey(`new_rule_${Date.now()}`);
-    setRows((current) => [
-      {
-        key: baseKey,
-        category: "custom",
-        label: "New point rule",
-        description: "",
-        value: "0",
-        min: -100000,
-        max: 100000,
-        unit: "điểm",
-        isCustom: true,
-        isEditing: true,
-        isNew: true,
-      },
-      ...current,
-    ]);
+  const openCreateModal = () => {
+    setCreateForm(makeEmptyRuleForm());
+    setIsCreateModalOpen(true);
+  };
+
+  const closeCreateModal = () => {
+    if (isBusy) return;
+    setIsCreateModalOpen(false);
+    setCreateForm(makeEmptyRuleForm());
+  };
+
+  const updateCreateForm = (field, value) => {
+    setCreateForm((current) => ({ ...current, [field]: value }));
   };
 
   const saveRow = async (row) => {
@@ -106,6 +122,7 @@ function PointPolicyTab(props) {
         category: row.category.trim() || "custom",
         label: row.label.trim(),
         description: row.description.trim(),
+        content: row.content.trim(),
         unit: row.unit.trim() || "điểm",
         min: Number(row.min),
         max: Number(row.max),
@@ -128,6 +145,14 @@ function PointPolicyTab(props) {
     () => new Map(rows.map((row) => [row.key, row])),
     [rows],
   );
+  const executableKeyOptions = useMemo(
+    () =>
+      (Array.isArray(pointPolicy?.settings) ? pointPolicy.settings : [])
+        .map((setting) => String(setting?.key || "").trim())
+        .filter((key) => key && !key.startsWith("custom.")),
+    [pointPolicy],
+  );
+  const executableKeySet = useMemo(() => new Set(executableKeyOptions), [executableKeyOptions]);
   const getPolicyValue = (key, fallback = 0) => toNumber(policyRowByKey.get(key)?.value, fallback);
   const previewThreshold = getPolicyValue("unlock.previewThreshold", pointPolicy?.unlock?.previewThreshold ?? 30);
   const fullViewThreshold = getPolicyValue("unlock.fullViewThreshold", pointPolicy?.unlock?.fullViewThreshold ?? 40);
@@ -199,6 +224,55 @@ function PointPolicyTab(props) {
   const progressTarget = nextTier?.key === "reader" ? previewThreshold : fullViewThreshold;
   const progressValue = Math.min(100, Math.round((currentPoints / Math.max(1, progressTarget)) * 100));
 
+  const createRule = async () => {
+    const derivedKey =
+      String(createForm.key || "").trim() ||
+      makeCustomPolicyKey(createForm.label || `new_rule_${Date.now()}`);
+    const key = derivedKey.startsWith("custom.") ? derivedKey : derivedKey;
+    const value = Number(createForm.value);
+    const min = Number(createForm.min);
+    const max = Number(createForm.max);
+    const isCustomKey = key.startsWith("custom.");
+    const isKnownExecutableKey = executableKeySet.has(key);
+
+    if (!key || !String(createForm.label || "").trim()) {
+      window.alert("Tên luật và key là bắt buộc.");
+      return;
+    }
+    if (policyRowByKey.has(key)) {
+      window.alert("Key này đã tồn tại. Hãy dùng Edit để cập nhật luật hiện có.");
+      return;
+    }
+    if (!isCustomKey && !isKnownExecutableKey) {
+      window.alert("Key chưa được backend định nghĩa. Hãy dùng key custom.* để lưu luật mới, hoặc nhập key chuẩn đã có sẵn.");
+      return;
+    }
+    if (!Number.isInteger(value) || !Number.isInteger(min) || !Number.isInteger(max) || min > max) {
+      window.alert("Giá trị, min và max phải là số nguyên hợp lệ.");
+      return;
+    }
+    if (value < min || value > max) {
+      window.alert("Giá trị hiện tại phải nằm trong khoảng min - max.");
+      return;
+    }
+
+    await updatePointPolicy([
+      {
+        key,
+        category: String(createForm.category || "custom").trim() || "custom",
+        label: String(createForm.label || "").trim(),
+        description: String(createForm.description || "").trim(),
+        content: String(createForm.content || "").trim(),
+        unit: String(createForm.unit || "điểm").trim() || "điểm",
+        min,
+        max,
+        value,
+      },
+    ]);
+
+    closeCreateModal();
+  };
+
   return (
     <section className="admin-page">
       <div className="admin-page-head">
@@ -206,7 +280,7 @@ function PointPolicyTab(props) {
           <h2>Points Policy</h2>
           <p>Quản lý luật điểm hiện thời và thêm luật điểm tùy chỉnh.</p>
         </div>
-        <button type="button" className="admin-primary-btn" onClick={addRow} disabled={isBusy}>
+        <button type="button" className="admin-primary-btn" onClick={openCreateModal} disabled={isBusy}>
           + Thêm luật
         </button>
       </div>
@@ -370,13 +444,26 @@ function PointPolicyTab(props) {
                   </td>
                   <td>
                     {row.isEditing ? (
-                      <input
-                        value={row.description}
-                        onChange={(event) => updateRow(row.key, { description: event.target.value })}
-                        disabled={isBusy}
-                      />
+                      <div className="policy-description-editor">
+                        <input
+                          value={row.description}
+                          onChange={(event) => updateRow(row.key, { description: event.target.value })}
+                          disabled={isBusy}
+                          placeholder="Mô tả ngắn"
+                        />
+                        <textarea
+                          value={row.content}
+                          onChange={(event) => updateRow(row.key, { content: event.target.value })}
+                          disabled={isBusy}
+                          rows={4}
+                          placeholder="Nội dung chi tiết"
+                        />
+                      </div>
                     ) : (
-                      <span>{row.description || "-"}</span>
+                      <div className="policy-description-copy">
+                        <span>{row.description || "-"}</span>
+                        {row.content ? <small>{row.content}</small> : null}
+                      </div>
                     )}
                   </td>
                   <td>
@@ -406,6 +493,149 @@ function PointPolicyTab(props) {
           </table>
         </div>
       </section>
+
+      {isCreateModalOpen && (
+        <ModalPortal>
+          <div className="report-modal-backdrop" role="dialog" aria-modal="true">
+            <div className="report-modal policy-create-modal">
+              <div className="report-modal-head">
+                <h3>Tạo luật điểm mới</h3>
+                <button type="button" className="report-close-btn" onClick={closeCreateModal}>
+                  x
+                </button>
+              </div>
+              <p className="report-modal-sub">
+                Key chuẩn chỉ thực thi khi backend đã định nghĩa sẵn. Key mới nên dùng dạng <code>custom.ten_luat</code> để lưu vào DB.
+              </p>
+
+              <div className="policy-create-form">
+                <div className="policy-create-grid">
+                  <label>
+                    <span>Tên luật</span>
+                    <input
+                      type="text"
+                      value={createForm.label}
+                      onChange={(event) => updateCreateForm("label", event.target.value)}
+                      disabled={isBusy}
+                      placeholder="Ví dụ: Thưởng khi tài liệu được bookmark"
+                    />
+                  </label>
+                  <label>
+                    <span>Key</span>
+                    <input
+                      type="text"
+                      list="policy-key-suggestions"
+                      value={createForm.key}
+                      onChange={(event) => updateCreateForm("key", event.target.value)}
+                      disabled={isBusy}
+                      placeholder="Ví dụ: custom.bookmark_reward hoặc unlock.hiddenKnowledgeThreshold"
+                    />
+                  </label>
+                  <label>
+                    <span>Nhóm luật</span>
+                    <select
+                      value={createForm.category}
+                      onChange={(event) => updateCreateForm("category", event.target.value)}
+                      disabled={isBusy}
+                    >
+                      <option value="custom">Luật tùy chỉnh</option>
+                      <option value="unlock">Quyền truy cập tài liệu</option>
+                      <option value="download">Tải tài liệu</option>
+                      <option value="rewards">Thưởng điểm</option>
+                      <option value="commentAntiSpam">Chống spam bình luận</option>
+                      <option value="qaRatingSuggestedPoints">Đánh giá Q&amp;A</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Đơn vị</span>
+                    <input
+                      type="text"
+                      value={createForm.unit}
+                      onChange={(event) => updateCreateForm("unit", event.target.value)}
+                      disabled={isBusy}
+                      placeholder="điểm"
+                    />
+                  </label>
+                  <label>
+                    <span>Giá trị</span>
+                    <input
+                      type="number"
+                      value={createForm.value}
+                      onChange={(event) => updateCreateForm("value", event.target.value)}
+                      disabled={isBusy}
+                    />
+                  </label>
+                  <label>
+                    <span>Min</span>
+                    <input
+                      type="number"
+                      value={createForm.min}
+                      onChange={(event) => updateCreateForm("min", event.target.value)}
+                      disabled={isBusy}
+                    />
+                  </label>
+                  <label>
+                    <span>Max</span>
+                    <input
+                      type="number"
+                      value={createForm.max}
+                      onChange={(event) => updateCreateForm("max", event.target.value)}
+                      disabled={isBusy}
+                    />
+                  </label>
+                  <label>
+                    <span>Mô tả</span>
+                    <input
+                      type="text"
+                      value={createForm.description}
+                      onChange={(event) => updateCreateForm("description", event.target.value)}
+                      disabled={isBusy}
+                      placeholder="Mô tả ngắn của luật"
+                    />
+                  </label>
+                </div>
+
+                <label className="policy-create-content-field">
+                  <span>Nội dung</span>
+                  <textarea
+                    value={createForm.content}
+                    onChange={(event) => updateCreateForm("content", event.target.value)}
+                    disabled={isBusy}
+                    rows={6}
+                    placeholder="Giải thích chi tiết nghiệp vụ, điều kiện áp dụng, hoặc ghi chú cho admin."
+                  />
+                </label>
+
+                <div className="policy-create-hint">
+                  <strong>Gợi ý key chuẩn</strong>
+                  <p>
+                    Dùng key có sẵn như <code>unlock.hiddenKnowledgeThreshold</code>, <code>rewards.commentGiven</code>,
+                    <code>download.standardCost</code> nếu muốn cập nhật luật backend đã biết.
+                  </p>
+                  <p>
+                    Dùng key <code>custom.*</code> nếu muốn tạo luật mới và lưu vào SQL. Loại này không tự gắn nghiệp vụ backend nếu chưa có code xử lý.
+                  </p>
+                </div>
+              </div>
+
+              <datalist id="policy-key-suggestions">
+                {executableKeyOptions.map((key) => (
+                  <option key={key} value={key} />
+                ))}
+              </datalist>
+
+              <div className="report-modal-actions">
+                <button type="button" onClick={closeCreateModal} disabled={isBusy}>
+                  Hủy
+                </button>
+                <button type="button" className="primary-btn" onClick={createRule} disabled={isBusy}>
+                  {isBusy ? "Đang tạo..." : "Tạo luật"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
     </section>
   );
 }

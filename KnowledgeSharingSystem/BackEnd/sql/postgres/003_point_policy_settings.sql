@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS point_policy_settings (
     category VARCHAR(50) NOT NULL DEFAULT 'custom',
     label VARCHAR(120) NULL,
     description VARCHAR(255) NULL,
+    content TEXT NULL,
     updated_by_user_id INTEGER NULL REFERENCES users(user_id) ON DELETE SET NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -12,6 +13,8 @@ ALTER TABLE point_policy_settings
     ADD COLUMN IF NOT EXISTS category VARCHAR(50) NOT NULL DEFAULT 'custom';
 ALTER TABLE point_policy_settings
     ADD COLUMN IF NOT EXISTS label VARCHAR(120) NULL;
+ALTER TABLE point_policy_settings
+    ADD COLUMN IF NOT EXISTS content TEXT NULL;
 ALTER TABLE point_policy_settings
     ADD COLUMN IF NOT EXISTS unit VARCHAR(40) NULL;
 ALTER TABLE point_policy_settings

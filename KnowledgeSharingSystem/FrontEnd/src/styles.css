@@ -5972,6 +5972,77 @@ textarea,
   line-height: 1.6;
 }
 
+.policy-create-modal {
+  width: min(920px, 100%);
+}
+
+.policy-create-form {
+  display: grid;
+  gap: 14px;
+}
+
+.policy-create-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.policy-create-grid label,
+.policy-create-content-field {
+  display: grid;
+  gap: 6px;
+  color: #274766;
+  font-weight: 700;
+}
+
+.policy-create-grid input,
+.policy-create-grid select,
+.policy-create-content-field textarea,
+.policy-description-editor textarea {
+  width: 100%;
+  border: 1px solid #b8c9e4;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #17324d;
+  background: #fff;
+}
+
+.policy-create-content-field textarea,
+.policy-description-editor textarea {
+  resize: vertical;
+}
+
+.policy-create-hint {
+  border: 1px solid #d7e6f6;
+  border-radius: 16px;
+  background: #f4f9ff;
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+  color: #244361;
+}
+
+.policy-create-hint strong,
+.policy-create-hint p {
+  margin: 0;
+}
+
+.policy-create-hint code {
+  font-size: 12px;
+}
+
+.policy-description-editor,
+.policy-description-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.policy-description-copy small {
+  color: #64748b;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .qa-page {
   display: grid;
   gap: 18px;

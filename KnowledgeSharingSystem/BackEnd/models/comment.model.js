@@ -847,10 +847,33 @@ const getCommentsForModeration = async ({ limit = 100, offset = 0, documentId = 
                     c.review_note AS "reviewNote",
                     c.reviewed_at AS "reviewedAt",
                     c.created_at AS "createdAt",
-                    c.updated_at AS "updatedAt"
+                    c.updated_at AS "updatedAt",
+                    pe.event_id AS "pointEventId",
+                    pe.status AS "pointEventStatus",
+                    pe.points AS "pointEventPoints",
+                    pe.reviewed_at AS "pointEventReviewedAt",
+                    pe.review_note AS "pointEventReviewNote",
+                    pe.reviewed_by_user_id AS "pointEventReviewedByUserId",
+                    ru.name AS "pointEventReviewedByName"
                 FROM comments c
                 INNER JOIN users u ON u.user_id = c.author_user_id
                 INNER JOIN documents d ON d.document_id = c.document_id
+                LEFT JOIN LATERAL (
+                    SELECT
+                        pe_inner.event_id,
+                        pe_inner.status,
+                        pe_inner.points,
+                        pe_inner.reviewed_at,
+                        pe_inner.review_note,
+                        pe_inner.reviewed_by_user_id
+                    FROM point_events pe_inner
+                    WHERE pe_inner.comment_id = c.comment_id
+                      AND pe_inner.event_type = 'comment_given'
+                      AND pe_inner.user_id = c.author_user_id
+                    ORDER BY pe_inner.event_id DESC
+                    LIMIT 1
+                ) pe ON TRUE
+                LEFT JOIN users ru ON ru.user_id = pe.reviewed_by_user_id
                 WHERE ($4::TEXT IS NULL OR c.status = $4)
                   AND ($3::INT IS NULL OR c.document_id = $3)
                 ORDER BY
@@ -884,10 +907,32 @@ const getCommentsForModeration = async ({ limit = 100, offset = 0, documentId = 
                 c.reviewNote,
                 c.reviewedAt,
                 c.createdAt,
-                c.updatedAt
+                c.updatedAt,
+                pe.eventId AS pointEventId,
+                pe.status AS pointEventStatus,
+                pe.points AS pointEventPoints,
+                pe.reviewedAt AS pointEventReviewedAt,
+                pe.reviewNote AS pointEventReviewNote,
+                pe.reviewedByUserId AS pointEventReviewedByUserId,
+                ru.name AS pointEventReviewedByName
             FROM dbo.Comments c
             INNER JOIN dbo.Users u ON u.userId = c.authorUserId
             INNER JOIN dbo.Documents d ON d.documentId = c.documentId
+            OUTER APPLY (
+                SELECT TOP 1
+                    peInner.eventId,
+                    peInner.status,
+                    peInner.points,
+                    peInner.reviewedAt,
+                    peInner.reviewNote,
+                    peInner.reviewedByUserId
+                FROM dbo.PointEvents peInner
+                WHERE peInner.commentId = c.commentId
+                  AND peInner.eventType = N'comment_given'
+                  AND peInner.userId = c.authorUserId
+                ORDER BY peInner.eventId DESC
+            ) pe
+            LEFT JOIN dbo.Users ru ON ru.userId = pe.reviewedByUserId
             WHERE (@status IS NULL OR c.status = @status)
               AND (@documentId IS NULL OR c.documentId = @documentId)
             ORDER BY
