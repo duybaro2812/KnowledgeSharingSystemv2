@@ -53,8 +53,48 @@ export function createCategoryFeature(ctx) {
     });
   };
 
+  const updateCategory = async (categoryId, body) => {
+    await call(async () => {
+      const payload = await apiRequest(`/categories/${categoryId}`, {
+        method: "PUT",
+        token,
+        body,
+      });
+      setStatus(payload.message || "Course updated.");
+      await loadCategories();
+      return payload;
+    });
+  };
+
+  const deactivateCategory = async (categoryId) => {
+    await call(async () => {
+      const payload = await apiRequest(`/categories/${categoryId}`, {
+        method: "DELETE",
+        token,
+      });
+      setStatus(payload.message || "Course deactivated.");
+      await loadCategories();
+      return payload;
+    });
+  };
+
+  const restoreCategory = async (categoryId) => {
+    await call(async () => {
+      const payload = await apiRequest(`/categories/${categoryId}/restore`, {
+        method: "PATCH",
+        token,
+      });
+      setStatus(payload.message || "Course restored.");
+      await loadCategories();
+      return payload;
+    });
+  };
+
   return {
     handleCreateCategory,
     handleCategoryClick,
+    updateCategory,
+    deactivateCategory,
+    restoreCategory,
   };
 }

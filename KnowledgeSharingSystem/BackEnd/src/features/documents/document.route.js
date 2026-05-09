@@ -1,0 +1,148 @@
+﻿const express = require('express');
+const authMiddleware = require('../../../middlewares/auth.middleware');
+const optionalAuthMiddleware = require('../../../middlewares/optional-auth.middleware');
+const roleMiddleware = require('../../../middlewares/role.middleware');
+const { documentUploadMiddleware } = require('../../../middlewares/upload.middleware');
+const {
+    uploadRateLimiter,
+    reportRateLimiter,
+} = require('../../../middlewares/rate-limit.middleware');
+const documentController = require('../../../controllers/document.controller');
+const documentEngagementController = require('../../../controllers/document-engagement.controller');
+const documentRatingController = require('../../../controllers/document-rating.controller');
+const documentAccessController = require('../../../controllers/document-access.controller');
+const hiddenKnowledgeController = require('../../../controllers/hidden-knowledge.controller');
+
+const router = express.Router();
+
+router.get('/', documentController.getDocuments);
+router.get(
+    '/all-uploaded',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getAllUploadedDocuments
+);
+router.get('/my-uploaded', authMiddleware, documentController.getMyUploadedDocuments);
+router.get(
+    '/pending',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getPendingDocuments
+);
+router.get(
+    '/reports/pending',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getPendingReportedDocuments
+);
+router.get(
+    '/:id/reports',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getDocumentReportHistory
+);
+router.get('/:id/plagiarism-check', authMiddleware, documentController.checkDocumentPlagiarism);
+router.post(
+    '/:id/plagiarism-recheck',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.recheckDocumentPlagiarism
+);
+router.get(
+    '/:id/check-duplicate',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.checkDocumentPlagiarism
+);
+router.patch(
+    '/:id/review',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.reviewDocument
+);
+router.patch(
+    '/:id/plagiarism-resolution',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.resolveDocumentPlagiarism
+);
+router.patch(
+    '/:id/lock',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.lockDocument
+);
+router.patch(
+    '/:id/unlock',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.unlockDocument
+);
+router.delete(
+    '/:id',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.deleteDocument
+);
+router.post('/:id/report', authMiddleware, reportRateLimiter, documentController.createDocumentReport);
+router.patch(
+    '/:id/report-resolution',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.resolveReportedDocument
+);
+router.get('/:id/engagement', authMiddleware, documentEngagementController.getEngagement);
+router.patch('/:id/reaction', authMiddleware, documentEngagementController.updateReaction);
+router.patch('/:id/save', authMiddleware, documentEngagementController.updateSavedState);
+router.get('/:id/ratings', optionalAuthMiddleware, documentRatingController.getDocumentRatings);
+router.put('/:id/ratings/me', authMiddleware, documentRatingController.upsertDocumentRating);
+router.delete('/:id/ratings/me', authMiddleware, documentRatingController.deleteDocumentRating);
+router.get('/:id/hidden-knowledge', authMiddleware, hiddenKnowledgeController.getHiddenKnowledge);
+router.patch(
+    '/:id/hidden-knowledge',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    hiddenKnowledgeController.updateHiddenKnowledge
+);
+router.get(
+    '/:id/hidden-knowledge/sources',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    hiddenKnowledgeController.listSources
+);
+router.post(
+    '/:id/hidden-knowledge/sources',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    hiddenKnowledgeController.addSource
+);
+router.get('/:id/preview', documentAccessController.getPublicDocumentPreview);
+router.get('/:id/preview/content', documentAccessController.streamPublicPreviewContent);
+router.get('/:id/access', authMiddleware, documentAccessController.getDocumentAccessPolicy);
+router.get('/:id/viewer', authMiddleware, documentAccessController.getDocumentViewer);
+router.get('/:id/viewer/content', authMiddleware, documentAccessController.streamPreparedViewerContent);
+router.post('/:id/view', authMiddleware, documentAccessController.registerFullView);
+router.post('/:id/download', authMiddleware, documentAccessController.registerDownload);
+router.get('/:id/download/content', authMiddleware, documentAccessController.streamPreparedDownloadContent);
+router.get('/:id', documentController.getDocumentDetail);
+router.post(
+    '/',
+    authMiddleware,
+    uploadRateLimiter,
+    documentUploadMiddleware.single('documentFile'),
+    documentController.createDocument
+);
+router.put(
+    '/:id',
+    authMiddleware,
+    documentUploadMiddleware.single('documentFile'),
+    documentController.updateDocument
+);
+router.get(
+    '/:id/duplicate-candidates',
+    authMiddleware,
+    roleMiddleware('admin', 'moderator'),
+    documentController.getDuplicateCandidates
+);
+
+module.exports = router;

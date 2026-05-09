@@ -1,7 +1,1 @@
-export function createLoginModel(input) {
-  return {
-    loginForm: input.loginForm,
-    showLoginPassword: !!input.showLoginPassword,
-    error: input.error || "",
-  };
-}
+export * from '../../../features/auth/login/login.model.js';

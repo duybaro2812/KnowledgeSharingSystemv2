@@ -1,6 +1,1 @@
-export function createSearchController(input) {
-  return {
-    onOpenDoc: (doc) => input.openPreviewReload(doc),
-    onBackHome: () => input.setActiveTab("home"),
-  };
-}
+export * from '../../../../features/search/search.controller.js';

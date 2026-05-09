@@ -31,6 +31,7 @@ const VALIDATION_RULES = Object.freeze({
     },
     user: {
         nameMax: 100,
+        bioMax: 500,
     },
 });
 

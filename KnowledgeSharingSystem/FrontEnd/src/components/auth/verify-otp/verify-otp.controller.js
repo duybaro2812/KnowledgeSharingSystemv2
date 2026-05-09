@@ -1,11 +1,1 @@
-export function createVerifyOtpController(input) {
-  return {
-    onSubmit: input.handleVerifyOtp,
-    onChangeOtpCode: (value) => input.setOtpCode(value),
-    onResendOtp: input.handleResendOtp,
-    goRegister: () => {
-      input.setAuthMode("register");
-      input.clearFeedback();
-    },
-  };
-}
+export * from '../../../features/auth/verify-otp/verify-otp.controller.js';

@@ -10,5 +10,12 @@ export function createNotificationFeature(ctx) {
     }, { actionKey: `notification:mark-read:${id}` });
   };
 
-  return { markRead };
+  const markAllRead = async () => {
+    await call(async () => {
+      await apiRequest("/notifications/read-all", { method: "PATCH", token });
+      await loadNotifications();
+    }, { actionKey: "notification:mark-all-read" });
+  };
+
+  return { markRead, markAllRead };
 }

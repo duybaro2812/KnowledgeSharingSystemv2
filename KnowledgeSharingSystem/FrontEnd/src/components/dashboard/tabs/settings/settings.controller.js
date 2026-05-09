@@ -1,3 +1,1 @@
-export function createSettingsController() {
-  return {};
-}
+export * from '../../../../features/settings/settings.controller.js';

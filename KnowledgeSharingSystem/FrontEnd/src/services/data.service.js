@@ -15,7 +15,11 @@ export function createDataFeature(ctx) {
   } = ctx;
 
   const loadCategories = async (keyword = "") => {
-    const payload = await apiRequest("/categories", { query: { keyword } });
+    const canManageCategories = Boolean(token && isModerator);
+    const payload = await apiRequest(canManageCategories ? "/categories/manage" : "/categories", {
+      token: canManageCategories ? token : undefined,
+      query: { keyword },
+    });
     setCategories(payload.data || []);
   };
 

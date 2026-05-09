@@ -115,6 +115,7 @@ app.use(async (error, req, res, next) => {
     let statusCode = error.statusCode || 500;
     let message = error.message || 'Internal server error.';
     const isDocumentUploadApi = req.method === 'POST' && req.originalUrl.startsWith('/api/documents');
+    const isAvatarUploadApi = req.method === 'PATCH' && req.originalUrl.startsWith('/api/users/me/avatar');
     const isUploadValidationError =
         error.code === 'LIMIT_FILE_SIZE' ||
         message === 'A document file is required.' ||
@@ -122,7 +123,9 @@ app.use(async (error, req, res, next) => {
 
     if (error.code === 'LIMIT_FILE_SIZE') {
         statusCode = 400;
-        message = 'Document file upload failed due to size policy.';
+        message = isAvatarUploadApi
+            ? 'Avatar image must be 2 MB or smaller.'
+            : 'Document file upload failed due to size policy.';
     }
 
     if (isDocumentUploadApi && isUploadValidationError && req.user?.userId) {

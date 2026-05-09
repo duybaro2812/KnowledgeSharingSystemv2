@@ -1,5 +1,1 @@
-export function createSettingsModel(input) {
-  return {
-    user: input.user || null,
-  };
-}
+export * from '../../../../features/settings/settings.model.js';

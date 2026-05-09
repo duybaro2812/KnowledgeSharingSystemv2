@@ -1,5 +1,1 @@
-export function createAuthShellController(input) {
-  return {
-    isMode: (mode) => input.authMode === mode,
-  };
-}
+export * from '../../features/auth/auth-shell.controller.js';

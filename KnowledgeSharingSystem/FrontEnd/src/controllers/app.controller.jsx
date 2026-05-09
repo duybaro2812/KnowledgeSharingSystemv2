@@ -1,1 +1,2 @@
-export { default } from "../AppController";
+export * from '../app/AppController';
+export { default } from '../app/AppController';

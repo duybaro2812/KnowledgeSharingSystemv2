@@ -1,9 +1,1 @@
-export function createPointsModel(input) {
-  return {
-    isBusy: Boolean(input.isBusy),
-    summary: input.pointSummary || null,
-    transactions: Array.isArray(input.pointTransactions) ? input.pointTransactions : [],
-    events: Array.isArray(input.myPointEvents) ? input.myPointEvents : [],
-    policy: input.pointPolicy || null,
-  };
-}
+export * from '../../../../features/points/points.model.js';

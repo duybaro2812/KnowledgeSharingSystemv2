@@ -1,6 +1,1 @@
-export function createLibraryController(input) {
-  return {
-    onPreviewDoc: (doc) => input.openPreviewReload(doc),
-    resolveUrl: (url) => input.resolveFileUrl(url),
-  };
-}
+export * from '../../../../features/library/library.controller.js';

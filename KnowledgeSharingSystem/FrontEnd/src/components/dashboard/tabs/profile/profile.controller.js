@@ -1,3 +1,1 @@
-export function createProfileController() {
-  return {};
-}
+export * from '../../../../features/profile/profile.controller.js';

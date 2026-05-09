@@ -1,6 +1,1 @@
-export function createForgotRequestModel(input) {
-  return {
-    forgotEmail: input.forgotEmail,
-    error: input.error || "",
-  };
-}
+export * from '../../../features/auth/forgot-request/forgot-request.model.js';

@@ -1,1 +1,2 @@
-export { default } from "../components/DashboardShell";
+export * from '../components/DashboardShell';
+export { default } from '../components/DashboardShell';

@@ -1,6 +1,1 @@
-export function createPointsController(input) {
-  return {
-    onRefresh: () => input.loadAllPointData?.(),
-  };
-}
-
+export * from '../../../../features/points/points.controller.js';

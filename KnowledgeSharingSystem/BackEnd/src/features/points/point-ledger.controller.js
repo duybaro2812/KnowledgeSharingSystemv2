@@ -1,0 +1,131 @@
+﻿const pointLedgerModel = require('../../../models/point-ledger.model');
+const { POINT_EVENT_STATUSES } = require('../../../config/workflow-statuses');
+
+const parseLimit = (rawLimit, defaultLimit = 50) => {
+    const parsed = Number(rawLimit);
+    if (!Number.isInteger(parsed) || parsed <= 0) return defaultLimit;
+    return Math.min(parsed, 200);
+};
+
+const getMyPointSummary = async (req, res, next) => {
+    try {
+        const summary = await pointLedgerModel.getMyPointSummary(req.user.userId);
+
+        if (!summary) {
+            const error = new Error('User not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        res.json({
+            success: true,
+            message: 'Point summary fetched successfully.',
+            data: summary,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getMyPointTransactions = async (req, res, next) => {
+    try {
+        const limit = parseLimit(req.query.limit, 50);
+        const transactions = await pointLedgerModel.getMyPointTransactions({
+            userId: req.user.userId,
+            limit,
+        });
+
+        res.json({
+            success: true,
+            message: 'Point transactions fetched successfully.',
+            data: transactions,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getMyPointEvents = async (req, res, next) => {
+    try {
+        const limit = parseLimit(req.query.limit, 50);
+        const status = req.query.status || null;
+        const allowedStatuses = Object.values(POINT_EVENT_STATUSES);
+
+        if (status && !allowedStatuses.includes(status)) {
+            const error = new Error(
+                `status must be one of '${allowedStatuses.join("', '")}'.`
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const events = await pointLedgerModel.getMyPointEvents({
+            userId: req.user.userId,
+            status,
+            limit,
+        });
+
+        res.json({
+            success: true,
+            message: 'Point events fetched successfully.',
+            data: events,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getPointPolicy = async (req, res, next) => {
+    try {
+        const policy = await pointLedgerModel.getPointPolicy();
+        res.json({
+            success: true,
+            message: 'Point policy fetched successfully.',
+            data: policy,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const updatePointPolicy = async (req, res, next) => {
+    try {
+        const policy = await pointLedgerModel.updatePointPolicy({
+            settings: req.body?.settings,
+            updatedByUserId: req.user.userId,
+        });
+
+        res.json({
+            success: true,
+            message: 'Point policy updated successfully.',
+            data: policy,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deletePointPolicySetting = async (req, res, next) => {
+    try {
+        const policy = await pointLedgerModel.deletePointPolicySetting({
+            settingKey: req.params.settingKey,
+        });
+
+        res.json({
+            success: true,
+            message: 'Point policy rule deleted successfully.',
+            data: policy,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+module.exports = {
+    getMyPointSummary,
+    getMyPointTransactions,
+    getMyPointEvents,
+    getPointPolicy,
+    updatePointPolicy,
+    deletePointPolicySetting,
+};
