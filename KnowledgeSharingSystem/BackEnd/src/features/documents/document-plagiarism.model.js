@@ -145,7 +145,7 @@ const getTextSimilarityCandidates = async ({ documentId, limit = 100 }) => {
                 INNER JOIN document_text_artifacts ta ON ta.document_id = d.document_id
                 INNER JOIN users u ON u.user_id = d.owner_user_id
                 WHERE d.document_id <> $1
-                  AND d.status IN ('pending', 'approved', 'rejected')
+                  AND d.status = 'approved'
                 ORDER BY d.created_at DESC, d.document_id DESC
                 LIMIT $2;
             `,
@@ -174,7 +174,7 @@ const getTextSimilarityCandidates = async ({ documentId, limit = 100 }) => {
             INNER JOIN dbo.DocumentTextArtifacts ta ON ta.documentId = d.documentId
             INNER JOIN dbo.Users u ON u.userId = d.ownerUserId
             WHERE d.documentId <> @documentId
-              AND d.status IN (N'pending', N'approved', N'rejected')
+              AND d.status = N'approved'
             ORDER BY d.createdAt DESC, d.documentId DESC;
         `);
 

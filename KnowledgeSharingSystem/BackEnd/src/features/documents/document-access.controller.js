@@ -42,23 +42,23 @@ const buildAttachmentDisposition = (title) => {
 };
 
 const buildGuestLockedOverlay = () => ({
-    title: 'Báº¡n chÆ°a Ä‘Äƒng nháº­p',
-    message: 'Báº¡n chÆ°a Ä‘Äƒng nháº­p, vui lÃ²ng Ä‘Äƒng nháº­p hoáº·c Ä‘Äƒng kÃ½ tÃ i khoáº£n.',
-    helperText: 'ÄÄƒng nháº­p hoáº·c táº¡o tÃ i khoáº£n Ä‘á»ƒ kiáº¿m Ä‘iá»ƒm, xem Ä‘áº§y Ä‘á»§ vÃ  táº£i tÃ i liá»‡u.',
+    title: 'Bạn chưa đăng nhập',
+    message: 'Bạn chưa đăng nhập, vui lòng đăng nhập hoặc đăng ký tài khoản.',
+    helperText: 'Đăng nhập hoặc tạo tài khoản để kiếm điểm, xem đầy đủ và tải tài liệu.',
     requiredPoints: POINT_POLICY.unlock.previewThreshold,
 });
 
 const buildGuestLoginRequiredOverlay = () => ({
-    title: 'Vui long dang nhap',
-    message: 'Vui long dang nhap de tiep tuc xem tai lieu nay.',
-    helperText: 'Tai lieu duoi 5 trang yeu cau dang nhap de truy cap.',
+    title: 'Vui lòng đăng nhập',
+    message: 'Vui lòng đăng nhập để tiếp tục xem tài liệu này.',
+    helperText: 'Tài liệu dưới 5 trang yêu cầu đăng nhập để truy cập.',
     requiredPoints: POINT_POLICY.unlock.previewThreshold,
 });
 
 const buildLockedInsufficientPointsOverlay = () => ({
-    title: 'Khong du diem',
-    message: `Ban can toi thieu ${POINT_POLICY.unlock.previewThreshold} diem de truy cap tai lieu nay.`,
-    helperText: 'Tai lieu duoi 5 trang khong cho phep xem preview.',
+    title: 'Không đủ điểm',
+    message: `Bạn cần tối thiểu ${POINT_POLICY.unlock.previewThreshold} điểm để truy cập tài liệu này.`,
+    helperText: 'Tài liệu dưới 5 trang không cho phép xem trước khi chưa đủ điểm.',
     requiredPoints: POINT_POLICY.unlock.previewThreshold,
 });
 
@@ -109,7 +109,7 @@ const applyLockedPreviewPolicyByPageCount = ({
             ...policy,
             canPreview: false,
             previewPageLimit: 0,
-            reason: 'Vui long dang nhap.',
+            reason: 'Vui lòng đăng nhập.',
             lockedOverlay: buildGuestLoginRequiredOverlay(),
         };
     }
@@ -118,7 +118,7 @@ const applyLockedPreviewPolicyByPageCount = ({
         ...policy,
         canPreview: false,
         previewPageLimit: 0,
-        reason: `Ban can toi thieu ${POINT_POLICY.unlock.previewThreshold} diem de truy cap tai lieu nay.`,
+        reason: `Bạn cần tối thiểu ${POINT_POLICY.unlock.previewThreshold} điểm để truy cập tài liệu này.`,
         lockedOverlay: buildLockedInsufficientPointsOverlay(),
     };
 };

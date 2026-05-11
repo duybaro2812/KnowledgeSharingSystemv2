@@ -278,10 +278,16 @@ const checkDocumentPlagiarismInternal = async (documentId) => {
     const combinedCandidatesById = new Map();
 
     for (const candidate of duplicateCandidates || []) {
+        if (candidate.status && String(candidate.status).toLowerCase() !== DOCUMENT_STATUSES.APPROVED) {
+            continue;
+        }
         combinedCandidatesById.set(Number(candidate.documentId), { ...candidate });
     }
 
     for (const candidate of textCandidates || []) {
+        if (String(candidate.status || '').toLowerCase() !== DOCUMENT_STATUSES.APPROVED) {
+            continue;
+        }
         const key = Number(candidate.documentId);
         const previous = combinedCandidatesById.get(key) || {};
         combinedCandidatesById.set(key, {

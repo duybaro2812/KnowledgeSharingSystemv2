@@ -343,6 +343,9 @@ const findDuplicateDocumentCandidates = async (documentId) => {
                     d.document_id AS "documentId",
                     d.title,
                     d.description,
+                    d.file_hash AS "fileHash",
+                    d.original_file_name AS "originalFileName",
+                    d.status,
                     d.owner_user_id AS "ownerUserId",
                     d.created_at AS "createdAt"
                 FROM documents d
@@ -359,7 +362,21 @@ const findDuplicateDocumentCandidates = async (documentId) => {
     const result = await pool
         .request()
         .input('documentId', sql.Int, documentId)
-        .execute('dbo.usp_FindDuplicateDocumentCandidates');
+        .query(`
+            SELECT TOP 30
+                d.documentId,
+                d.title,
+                d.description,
+                d.fileHash,
+                d.originalFileName,
+                d.status,
+                d.ownerUserId,
+                d.createdAt
+            FROM dbo.Documents d
+            WHERE d.documentId <> @documentId
+              AND d.status = N'approved'
+            ORDER BY d.createdAt DESC, d.documentId DESC;
+        `);
 
     return result.recordset;
 };
@@ -627,6 +644,60 @@ const deleteDocumentById = async ({
                             INNER JOIN questions q ON q.question_id = a.question_id
                             WHERE q.document_id = $1
                        );
+                `,
+                [documentId]
+            );
+            await client.query(
+                `
+                    DELETE FROM point_events pe
+                    WHERE pe.document_id = $1
+                       OR pe.comment_id IN (
+                            SELECT c.comment_id
+                            FROM comments c
+                            WHERE c.document_id = $1
+                       )
+                       OR pe.qa_session_id IN (
+                            SELECT qs.session_id
+                            FROM question_sessions qs
+                            WHERE qs.document_id = $1
+                       );
+                `,
+                [documentId]
+            );
+            await client.query(`DELETE FROM hidden_knowledge_sources WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM document_hidden_knowledge WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM qa_rating_feedback WHERE document_id = $1;`, [documentId]);
+            await client.query(
+                `
+                    DELETE FROM session_ratings sr
+                    WHERE sr.session_id IN (
+                        SELECT qs.session_id
+                        FROM question_sessions qs
+                        WHERE qs.document_id = $1
+                    );
+                `,
+                [documentId]
+            );
+            await client.query(
+                `
+                    DELETE FROM question_messages qm
+                    WHERE qm.session_id IN (
+                        SELECT qs.session_id
+                        FROM question_sessions qs
+                        WHERE qs.document_id = $1
+                    );
+                `,
+                [documentId]
+            );
+            await client.query(`DELETE FROM question_sessions WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM document_access_logs WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM document_ratings WHERE document_id = $1;`, [documentId]);
+            await client.query(`DELETE FROM document_text_artifacts WHERE document_id = $1;`, [documentId]);
+            await client.query(
+                `
+                    DELETE FROM document_plagiarism_reviews
+                    WHERE document_id = $1
+                       OR compared_document_id = $1;
                 `,
                 [documentId]
             );

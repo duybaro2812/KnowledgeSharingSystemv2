@@ -68,6 +68,15 @@ function ButtonIcon({ name }) {
     );
   }
 
+  if (name === "duplicate") {
+    return (
+      <svg className="button-icon" {...common}>
+        <rect x="8" y="8" width="11" height="11" rx="2" />
+        <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+      </svg>
+    );
+  }
+
   return null;
 }
 
@@ -1091,6 +1100,7 @@ function ModerationTabView(props) {
                 <th>Course ID</th>
                 <th>Status</th>
                 <th>Points</th>
+                <th>Duplicate</th>
                 <th>Experience</th>
                 <th>Action</th>
               </tr>
@@ -1100,6 +1110,7 @@ function ModerationTabView(props) {
                 const documentId = Number(doc.documentId || 0);
                 const isFocused = Number(focusedDocumentId) === documentId;
                 const pointEvent = getDocumentPointEvent(documentId);
+                const isChecking = Boolean(checkingDuplicateByDocId[documentId]);
                 const pointValue =
                   docPointDraftById[documentId] ??
                   pointEvent?.points ??
@@ -1161,6 +1172,18 @@ function ModerationTabView(props) {
                       <td>
                         <button
                           type="button"
+                          className="moderation-icon-action duplicate"
+                          title={isChecking ? "Checking duplicate" : "Check duplicate"}
+                          aria-label={isChecking ? "Checking duplicate" : "Check duplicate"}
+                          disabled={controlsDisabled || isChecking}
+                          onClick={() => handleCheckDuplicate(doc)}
+                        >
+                          <ButtonIcon name="duplicate" />
+                        </button>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
                           className="moderation-icon-action edit"
                           title="Edit experience"
                           aria-label="Edit experience"
@@ -1187,7 +1210,7 @@ function ModerationTabView(props) {
                     </tr>
                     {model.duplicateByDocId[documentId] ? (
                       <tr className="moderation-table-detail-row">
-                        <td colSpan={8}>{renderDuplicateList(documentId)}</td>
+                        <td colSpan={9}>{renderDuplicateList(documentId)}</td>
                       </tr>
                     ) : null}
                   </Fragment>

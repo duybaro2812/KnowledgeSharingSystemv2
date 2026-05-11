@@ -1,0 +1,11 @@
+# Local environment files
+.env
+.env.*
+
+# Dependencies
+node_modules/
+
+# Build/runtime output
+dist/
+uploads/
+*.log

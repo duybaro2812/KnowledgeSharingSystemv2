@@ -43,7 +43,7 @@ The old `src/components`, `src/views`, and `src/controllers` paths are compatibi
 
 Default API base: `http://localhost:3000/api`.
 
-If needed, copy `.env.example` to `.env` and adjust:
+If needed, create `.env` and adjust:
 
 `VITE_API_BASE_URL=...`
 

@@ -7,8 +7,8 @@ const buildDownloadConfirmation = ({ title, downloadCost, points }) => {
     }
 
     return {
-        title: 'XÃ¡c nháº­n táº£i tÃ i liá»‡u',
-        message: `XÃ¡c nháº­n máº¥t ${downloadCost} Ä‘iá»ƒm Ä‘á»ƒ download tÃ i liá»‡u "${title}"?`,
+        title: 'Xác nhận tải tài liệu',
+        message: `Xác nhận mất ${downloadCost} điểm để tải tài liệu "${title}"?`,
         pointsBefore: points,
         pointsCost: downloadCost,
         pointsAfterIfConfirmed: Math.max(0, Number(points || 0) - Number(downloadCost || 0)),
@@ -16,9 +16,9 @@ const buildDownloadConfirmation = ({ title, downloadCost, points }) => {
 };
 
 const buildLockedPreviewOverlay = ({ points, requiredPoints }) => ({
-    title: 'This document is locked',
-    message: `You need at least ${requiredPoints} points to unlock this document.`,
-    helperText: 'Earn more points to view, comment, discuss, and ask questions about this document.',
+    title: 'Tài liệu đang bị khóa',
+    message: `Bạn cần ít nhất ${requiredPoints} điểm để mở khóa tài liệu này.`,
+    helperText: 'Hãy kiếm thêm điểm để xem đầy đủ, bình luận, thảo luận và đặt câu hỏi về tài liệu.',
     currentPoints: points,
     requiredPoints,
     shortfallPoints: Math.max(0, Number(requiredPoints || 0) - Number(points || 0)),
@@ -309,7 +309,7 @@ const createLimitedFullViewAccessLog = async ({
 
             if (todayFullViewCount >= safeDailyViewLimit) {
                 const error = new Error(
-                    `Báº¡n Ä‘Ã£ vÆ°á»£t quÃ¡ giá»›i háº¡n ${safeDailyViewLimit} lÆ°á»£t xem tÃ i liá»‡u trong ngÃ y. Vui lÃ²ng kiáº¿m thÃªm Ä‘iá»ƒm Ä‘á»ƒ má»Ÿ khÃ³a xem Ä‘áº§y Ä‘á»§.`
+                    `Bạn đã vượt quá giới hạn ${safeDailyViewLimit} lượt xem tài liệu trong ngày. Vui lòng kiếm thêm điểm để mở khóa xem đầy đủ.`
                 );
                 error.statusCode = 403;
                 error.data = {
@@ -349,7 +349,7 @@ const createLimitedFullViewAccessLog = async ({
     const todayFullViewCount = await getTodayFullViewCount(viewerUserId);
     if (todayFullViewCount >= safeDailyViewLimit) {
         const error = new Error(
-            `Báº¡n Ä‘Ã£ vÆ°á»£t quÃ¡ giá»›i háº¡n ${safeDailyViewLimit} lÆ°á»£t xem tÃ i liá»‡u trong ngÃ y. Vui lÃ²ng kiáº¿m thÃªm Ä‘iá»ƒm Ä‘á»ƒ má»Ÿ khÃ³a xem Ä‘áº§y Ä‘á»§.`
+            `Bạn đã vượt quá giới hạn ${safeDailyViewLimit} lượt xem tài liệu trong ngày. Vui lòng kiếm thêm điểm để mở khóa xem đầy đủ.`
         );
         error.statusCode = 403;
         error.data = {
@@ -602,7 +602,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
                 requiredPoints: POINT_POLICY.unlock.previewThreshold,
             }),
             tier: 'locked',
-            reason: `Need at least ${POINT_POLICY.unlock.previewThreshold} points to unlock this document.`,
+            reason: `Bạn cần ít nhất ${POINT_POLICY.unlock.previewThreshold} điểm để mở khóa tài liệu này.`,
         };
     }
 
@@ -631,7 +631,7 @@ const buildAccessPolicy = async ({ userId, role, document }) => {
             reason:
                 viewsRemainingToday > 0
                     ? null
-                    : `Báº¡n Ä‘Ã£ vÆ°á»£t quÃ¡ giá»›i háº¡n ${viewLimit} lÆ°á»£t xem tÃ i liá»‡u trong ngÃ y. Vui lÃ²ng kiáº¿m thÃªm Ä‘iá»ƒm Ä‘á»ƒ má»Ÿ khÃ³a xem Ä‘áº§y Ä‘á»§.`,
+                    : `Bạn đã vượt quá giới hạn ${viewLimit} lượt xem tài liệu trong ngày. Vui lòng kiếm thêm điểm để mở khóa xem đầy đủ.`,
         };
     }
 

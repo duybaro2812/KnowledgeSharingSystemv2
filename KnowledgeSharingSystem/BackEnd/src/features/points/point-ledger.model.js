@@ -336,7 +336,7 @@ const buildPolicyResponseFromRows = (rows) => {
             label: row.label || row.settingKey,
             description: row.description || '',
             content: row.content || '',
-            unit: row.unit || 'Ä‘iá»ƒm',
+            unit: row.unit || 'điểm',
             min: row.min,
             max: row.max,
         }));
@@ -351,7 +351,7 @@ const buildPolicyResponseFromRows = (rows) => {
             label: row.label || setting.label,
             description: row.description || setting.description,
             content: row.content || setting.content || '',
-            unit: row.unit || setting.unit || 'Ä‘iá»ƒm',
+            unit: row.unit || setting.unit || 'điểm',
             min: Number(row.min ?? setting.min),
             max: Number(row.max ?? setting.max),
             value: Number(row.settingValue ?? setting.value),
@@ -397,7 +397,7 @@ const updatePointPolicy = async ({ settings, updatedByUserId }) => {
     const normalizedSettings = settings.map((setting) => {
         const key = String(setting?.key || setting?.settingKey || '').trim();
         if (!existingSettingKeys.has(key)) {
-            const error = new Error('Luáº­t nÃ y chÆ°a cÃ³ trong cÆ¡ sá»Ÿ dá»¯ liá»‡u, khÃ´ng thá»ƒ Ã¡p dá»¥ng.');
+            const error = new Error('Luật này chưa có trong cơ sở dữ liệu, không thể áp dụng.');
             error.statusCode = 400;
             throw error;
         }

@@ -221,7 +221,6 @@ function PreviewPanel(props) {
   const [reportReason, setReportReason] = useState("");
   const [commentInput, setCommentInput] = useState("");
   const [ratingStars, setRatingStars] = useState(0);
-  const [ratingText, setRatingText] = useState("");
   const [isSubmittingRating, setIsSubmittingRating] = useState(false);
   const [replyInputByCommentId, setReplyInputByCommentId] = useState({});
   const [replyOpenByCommentId, setReplyOpenByCommentId] = useState({});
@@ -351,8 +350,7 @@ function PreviewPanel(props) {
   useEffect(() => {
     const myRating = ratingSummary?.myRating;
     setRatingStars(Number(myRating?.stars || 0));
-    setRatingText(myRating?.reviewText || "");
-  }, [docId, ratingSummary?.myRating?.ratingId, ratingSummary?.myRating?.stars, ratingSummary?.myRating?.reviewText]);
+  }, [docId, ratingSummary?.myRating?.ratingId, ratingSummary?.myRating?.stars]);
 
   useEffect(() => {
     const targetCommentId = Number(focusCommentId || 0);
@@ -656,7 +654,7 @@ function PreviewPanel(props) {
     try {
       await onSaveRating(docId, {
         stars: parsedStars,
-        reviewText: ratingText.trim(),
+        reviewText: "",
       });
     } finally {
       setIsSubmittingRating(false);
@@ -1202,16 +1200,7 @@ function PreviewPanel(props) {
                   </button>
                 ))}
               </div>
-              <textarea
-                rows={3}
-                maxLength={1000}
-                value={ratingText}
-                onChange={(event) => setRatingText(event.target.value)}
-                placeholder="Chia sẻ ngắn gọn tài liệu này hữu ích ở điểm nào..."
-                disabled={isBusy || isSubmittingRating}
-              />
               <div className="document-rating-compose-actions">
-                <span>{ratingText.length}/1000</span>
                 {ratingSummary.myRating && (
                   <button
                     type="button"
@@ -1249,7 +1238,6 @@ function PreviewPanel(props) {
                     <strong>{item.userName || "Người dùng"}</strong>
                     {renderStars(item.stars)}
                   </div>
-                  {item.reviewText && <p>{item.reviewText}</p>}
                   <small>{new Date(item.updatedAt || item.createdAt).toLocaleString()}</small>
                 </div>
               </article>

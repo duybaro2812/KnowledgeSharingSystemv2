@@ -26,13 +26,13 @@ Shared infrastructure remains outside features:
 - `middlewares`: auth, role checks, upload handling, rate limits.
 - `services`: Cloudinary, mail, preview, text extraction, realtime, metrics.
 - `utils`: database client and input sanitizers.
-- `sql`, `scripts`, `docs`, `postman`: database and project support files.
+- `sql`, `scripts`, `docs`: database and project support files.
 
 The old `controllers`, `models`, and `routes` folders are compatibility wrappers. Open the files in `src/features/<feature>` when you want to read or edit real business code.
 
 ## Run
 
-1. Copy `.env.example` to `.env` and fill values.
+1. Create `.env` and fill the required database, JWT, Cloudinary, and SMTP values.
 2. Install dependencies:
    - `npm install`
 3. Start server:

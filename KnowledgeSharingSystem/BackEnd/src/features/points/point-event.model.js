@@ -1,5 +1,7 @@
 ﻿const { getPool, sql, isPostgresClient } = require('../../../utils/db');
 
+const { POINT_POLICY_SETTING_DEFINITIONS } = require('../../../config/point-policy');
+
 const EVENT_TYPES = {
     UPLOAD_SUBMITTED: 'upload_submitted',
     UPLOAD_APPROVED: 'upload_approved',
@@ -22,6 +24,107 @@ const EVENT_TO_TRANSACTION_TYPE = {
     document_saved_by_other: 'moderation_reward',
     qa_session_rated: 'moderation_reward',
     hidden_knowledge_contribution: 'hidden_knowledge_reward',
+};
+
+const POINT_POLICY_DEFINITION_BY_KEY = new Map(
+    POINT_POLICY_SETTING_DEFINITIONS.map((definition) => [definition.key, definition])
+);
+
+const EVENT_TYPE_TO_POLICY_KEY = {
+    [EVENT_TYPES.UPLOAD_SUBMITTED]: 'rewards.uploadSubmitted',
+    [EVENT_TYPES.UPLOAD_APPROVED]: 'rewards.uploadApproved',
+    [EVENT_TYPES.COMMENT_GIVEN]: 'rewards.commentGiven',
+    [EVENT_TYPES.COMMENT_RECEIVED]: 'rewards.commentReceived',
+    [EVENT_TYPES.UPVOTE_RECEIVED]: 'rewards.upvoteReceived',
+    [EVENT_TYPES.DOCUMENT_SAVED_BY_OTHER]: 'rewards.documentSavedByOther',
+};
+
+const parseMetadata = (metadata) => {
+    if (!metadata) return {};
+    if (typeof metadata === 'object') return metadata;
+    try {
+        const parsed = JSON.parse(metadata);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+};
+
+const getPolicyKeyForPointEvent = (pointEvent) => {
+    const eventType = String(pointEvent?.eventType || '').toLowerCase();
+    if (eventType === EVENT_TYPES.QA_SESSION_RATED) {
+        const stars = Number(parseMetadata(pointEvent.metadata).stars);
+        if (Number.isInteger(stars) && stars >= 1 && stars <= 5) {
+            return `qaRatingSuggestedPoints.${stars}`;
+        }
+        return null;
+    }
+
+    return EVENT_TYPE_TO_POLICY_KEY[eventType] || null;
+};
+
+const getDefaultPolicyRange = (settingKey) => {
+    const definition = POINT_POLICY_DEFINITION_BY_KEY.get(settingKey);
+    if (!definition) return null;
+    return {
+        settingKey,
+        label: definition.label || settingKey,
+        min: Number(definition.min),
+        max: Number(definition.max),
+    };
+};
+
+const getPolicyRangeForReview = async ({ client, settingKey }) => {
+    if (!settingKey) return null;
+
+    const defaultRange = getDefaultPolicyRange(settingKey);
+    if (!isPostgresClient()) return defaultRange;
+
+    try {
+        const result = await client.query(
+            `
+                SELECT
+                    setting_key AS "settingKey",
+                    COALESCE(label, setting_key) AS label,
+                    min_value AS min,
+                    max_value AS max
+                FROM point_policy_settings
+                WHERE setting_key = $1
+                LIMIT 1;
+            `,
+            [settingKey]
+        );
+        const row = result.rows?.[0] || null;
+        if (!row) return defaultRange;
+
+        return {
+            settingKey,
+            label: row.label || defaultRange?.label || settingKey,
+            min: Number(row.min ?? defaultRange?.min),
+            max: Number(row.max ?? defaultRange?.max),
+        };
+    } catch {
+        return defaultRange;
+    }
+};
+
+const assertPointDeltaWithinPolicy = async ({ client, pointEvent, pointDelta }) => {
+    if (!Number.isInteger(pointDelta)) return;
+
+    const range = await getPolicyRangeForReview({
+        client,
+        settingKey: getPolicyKeyForPointEvent(pointEvent),
+    });
+    if (!range) return;
+    if (!Number.isInteger(range.min) || !Number.isInteger(range.max) || range.min > range.max) return;
+
+    if (pointDelta < range.min || pointDelta > range.max) {
+        const error = new Error(
+            `Point value for ${range.label} must be between ${range.min} and ${range.max}.`
+        );
+        error.statusCode = 400;
+        throw error;
+    }
 };
 
 const createPointEvent = async ({
@@ -1193,7 +1296,8 @@ const reviewPointEvent = async ({
                         pe.status,
                         pe.document_id AS "documentId",
                         pe.comment_id AS "commentId",
-                        pe.qa_session_id AS "qaSessionId"
+                        pe.qa_session_id AS "qaSessionId",
+                        pe.metadata
                     FROM point_events pe
                     WHERE pe.event_id = $1
                     FOR UPDATE;
@@ -1213,6 +1317,13 @@ const reviewPointEvent = async ({
             const nextApprovedPoints = Number.isInteger(pointDeltaOverride)
                 ? pointDeltaOverride
                 : previousPoints;
+            if (decision === 'approved') {
+                await assertPointDeltaWithinPolicy({
+                    client,
+                    pointEvent,
+                    pointDelta: nextApprovedPoints,
+                });
+            }
 
             let pointDelta = 0;
             if (decision === 'approved') {
@@ -1390,7 +1501,8 @@ const reviewPointEvent = async ({
                 pe.status,
                 pe.documentId,
                 pe.commentId,
-                pe.qaSessionId
+                pe.qaSessionId,
+                pe.metadata
             FROM dbo.PointEvents pe WITH (UPDLOCK, ROWLOCK)
             WHERE pe.eventId = @eventId;
         `);
@@ -1415,6 +1527,13 @@ const reviewPointEvent = async ({
         const nextApprovedPoints = Number.isInteger(pointDeltaOverride)
             ? pointDeltaOverride
             : previousPoints;
+        if (decision === 'approved') {
+            await assertPointDeltaWithinPolicy({
+                client: transaction,
+                pointEvent,
+                pointDelta: nextApprovedPoints,
+            });
+        }
 
         let pointDelta = 0;
         if (decision === 'approved') {

@@ -166,9 +166,12 @@ const downloadRemoteFileBuffer = (fileUrl) =>
             }
 
             if (response.statusCode !== 200) {
-                reject(
-                    new Error(`Failed to download remote file. HTTP status ${response.statusCode}.`)
+                const error = new Error(
+                    `Failed to download remote file. HTTP status ${response.statusCode}.`
                 );
+                error.statusCode = response.statusCode;
+                error.url = fileUrl;
+                reject(error);
                 response.resume();
                 return;
             }
@@ -182,6 +185,77 @@ const downloadRemoteFileBuffer = (fileUrl) =>
 
         request.on('error', reject);
     });
+
+const shouldRetryCloudinaryWithSignedUrl = (error) =>
+    error &&
+    (Number(error.statusCode) === 401 || Number(error.statusCode) === 403);
+
+const buildSignedCloudinaryRawUrl = (fileUrl) => {
+    const publicId = extractCloudinaryPublicIdFromUrl(fileUrl);
+
+    if (!publicId) {
+        return null;
+    }
+
+    ensureCloudinaryConfigured();
+
+    return cloudinary.url(publicId, {
+        resource_type: 'raw',
+        type: 'upload',
+        secure: true,
+        sign_url: true,
+    });
+};
+
+const buildPrivateCloudinaryDownloadUrl = (fileUrl) => {
+    const publicId = extractCloudinaryPublicIdFromUrl(fileUrl);
+
+    if (!publicId) {
+        return null;
+    }
+
+    ensureCloudinaryConfigured();
+
+    const format = path.extname(publicId).replace('.', '');
+
+    if (!format) {
+        return null;
+    }
+
+    return cloudinary.utils.private_download_url(publicId, format, {
+        resource_type: 'raw',
+        type: 'upload',
+        attachment: false,
+        expires_at: Math.floor(Date.now() / 1000) + 300,
+    });
+};
+
+const downloadCloudinaryFileBuffer = async (fileUrl) => {
+    try {
+        return await downloadRemoteFileBuffer(fileUrl);
+    } catch (error) {
+        if (!shouldRetryCloudinaryWithSignedUrl(error)) {
+            throw error;
+        }
+
+        const retryUrls = [
+            buildSignedCloudinaryRawUrl(fileUrl),
+            buildPrivateCloudinaryDownloadUrl(fileUrl),
+        ].filter((url, index, urls) => url && url !== fileUrl && urls.indexOf(url) === index);
+
+        let latestError = error;
+
+        for (const retryUrl of retryUrls) {
+            try {
+                return await downloadRemoteFileBuffer(retryUrl);
+            } catch (retryError) {
+                latestError = retryError;
+            }
+        }
+
+        throw latestError;
+    }
+};
 
 const readLocalUploadedFileBuffer = async (fileUrl) => {
     if (typeof fileUrl !== 'string' || !fileUrl.startsWith('/uploads/')) {
@@ -207,6 +281,10 @@ const downloadStoredDocumentBuffer = async (fileUrl) => {
 
     if (fileUrl.startsWith('/uploads/')) {
         return readLocalUploadedFileBuffer(fileUrl);
+    }
+
+    if (isCloudinaryAssetUrl(fileUrl)) {
+        return downloadCloudinaryFileBuffer(fileUrl);
     }
 
     if (/^https?:\/\//i.test(fileUrl)) {

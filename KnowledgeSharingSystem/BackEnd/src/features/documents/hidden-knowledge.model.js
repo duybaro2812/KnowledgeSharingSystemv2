@@ -152,7 +152,7 @@ const getHiddenKnowledgeForViewer = async ({ documentId, viewerUserId }) => {
         const canView = canEdit || Number(viewer.points || 0) >= requiredPoints;
 
         if (!canView) {
-            const error = new Error(`Báº¡n cáº§n Ã­t nháº¥t ${requiredPoints} Ä‘iá»ƒm Ä‘á»ƒ xem BÃ i tá»•ng há»£p kinh nghiá»‡m cá»§a tÃ i liá»‡u.`);
+            const error = new Error(`Bạn cần ít nhất ${requiredPoints} điểm để xem Bài tổng hợp kinh nghiệm của tài liệu.`);
             error.statusCode = 403;
             error.data = {
                 requiredPoints,
